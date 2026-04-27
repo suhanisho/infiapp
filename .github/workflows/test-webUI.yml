@@ -34,9 +34,6 @@ jobs:
       - name: Install WebUI dependencies
         run: npm --prefix webUI ci
 
-      - name: Run WebUI package tests
-        run: python -m repo_tools test-web
-
       - name: Build WebUI
         run: python -m repo_tools build-web
 

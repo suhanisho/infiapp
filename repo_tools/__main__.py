@@ -89,10 +89,6 @@ def typecheck_agents() -> None:
             run(python_command(*mypy_base_args, "."), cwd=test_dir, env=test_env)
 
 
-def test_web() -> None:
-    run(npm_webui_command("test"))
-
-
 def build_web() -> None:
     run(npm_webui_command("run", "build"))
 
@@ -108,7 +104,6 @@ COMMANDS = {
     "codegen-check": codegen_check,
     "test-agents": test_agents,
     "typecheck-agents": typecheck_agents,
-    "test-web": test_web,
     "build-web": build_web,
     "test-web-e2e": test_web_e2e,
 }

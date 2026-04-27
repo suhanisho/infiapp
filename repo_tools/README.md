@@ -50,12 +50,6 @@ Type check agents and shared utilities:
 python -m repo_tools typecheck-agents
 ```
 
-Run WebUI package tests:
-
-```bash
-python -m repo_tools test-web
-```
-
 Build WebUI:
 
 ```bash

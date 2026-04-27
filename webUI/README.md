@@ -18,12 +18,6 @@ Install dependencies before running WebUI checks:
 npm --prefix webUI ci
 ```
 
-Run package tests for generated-client behavior and other non-visual logic:
-
-```bash
-npm --prefix webUI test
-```
-
 Build the Next.js app before Playwright E2E and screenshot tests:
 
 ```bash
@@ -46,4 +40,4 @@ npm --prefix webUI run test:e2e:update
 
 Review the generated image diff before committing updated baselines.
 
-The GitHub workflow `.github/workflows/test-webUI.yml` runs package tests, builds the app, and then runs Playwright E2E plus screenshot tests.
+The GitHub workflow `.github/workflows/test-webUI.yml` builds the app and then runs Playwright E2E plus screenshot tests.

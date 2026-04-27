@@ -37,7 +37,7 @@ webUI/
 .github/workflows/
   test-agents.yml            Agent spec validation, agent tests, Python compile checks
   test-db.yml                DynamoDB spec validation and generated-code checks
-  test-webUI.yml             WebUI package tests, build, Playwright E2E and screenshot checks
+  test-webUI.yml             WebUI build, Playwright E2E and screenshot checks
   deploy.yml                 Main-only deploy workflow
   verify-deployed-state.yml  Main-only deployed-state verification
 ```
@@ -56,7 +56,7 @@ See [dynamodb/README.md](dynamodb/README.md) for the table spec format, supporte
 
 ## WebUI
 
-`webUI/` is a single Next.js App Router application. It can call external Lambda agents through generated helpers, uses generated agent mocks for local development, and should be tested with package tests and Playwright E2E screenshots.
+`webUI/` is a single Next.js App Router application. It can call external Lambda agents through generated helpers, uses generated agent mocks for local development, and should be tested with build checks and Playwright E2E screenshots.
 
 See [webUI/README.md](webUI/README.md) for WebUI conventions, generated helper usage, local mock behavior, and test expectations.
 
@@ -127,7 +127,7 @@ The test workflows run on pull requests and pushes to `main`:
 
 - `.github/workflows/test-agents.yml` validates agent specs, runs all agent tests, and compiles Python tooling.
 - `.github/workflows/test-db.yml` validates DynamoDB table specs and fails if generated files are stale.
-- `.github/workflows/test-webUI.yml` installs and tests `webUI`, builds it, and runs Playwright E2E plus screenshot tests.
+- `.github/workflows/test-webUI.yml` installs `webUI`, builds it, and runs Playwright E2E plus screenshot tests.
 
 ## Operations
 
