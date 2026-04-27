@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from repo_tools.common import iter_agent_dirs, iter_table_paths, load_json
+from repo_tools.common import iter_agent_dirs, iter_table_paths, load_json, load_table_spec
 from repo_tools.deploy import (
     LAMBDA_HANDLER,
     VERCEL_AGENT_POLICY_NAME,
@@ -41,7 +41,7 @@ def run_json(command: list[str]) -> tuple[int, dict[str, Any]]:
 def check_tables() -> list[str]:
     errors: list[str] = []
     for path in iter_table_paths():
-        table = load_json(path)
+        table = load_table_spec(path)
         code, data = run_json(["aws", "dynamodb", "describe-table", "--table-name", table["table_name"]])
         if code != 0:
             errors.append(f"DynamoDB table missing or inaccessible: {table['table_name']}")

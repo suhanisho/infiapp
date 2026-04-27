@@ -25,6 +25,13 @@ def load_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def load_table_spec(path: Path) -> dict[str, Any]:
+    table = load_json(path)
+    table["owner_agent"] = path.parent.name
+    table["table_name"] = path.stem
+    return table
+
+
 def iter_agent_dirs() -> list[Path]:
     if not AGENTS_DIR.exists():
         return []

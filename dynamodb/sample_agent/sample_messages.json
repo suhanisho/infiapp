@@ -1,5 +1,4 @@
 {
-  "table_name": "sample_messages",
   "primary_key": {
     "partition_key": {
       "name": "app_name",

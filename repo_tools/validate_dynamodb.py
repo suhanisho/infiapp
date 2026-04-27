@@ -21,7 +21,7 @@ from repo_tools.common import (
 
 VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean"}
 VALID_KEY_TYPES = {"String", "Number", "Binary"}
-INFERRED_OR_DEFAULTED_FIELDS = {"owner_agent", "billing_mode"}
+INFERRED_OR_DEFAULTED_FIELDS = {"table_name", "owner_agent", "billing_mode"}
 LEGACY_TYPE_NAMES = {
     "S": "String",
     "N": "Number",
@@ -43,10 +43,10 @@ def normalized_key_signature(key: object) -> object:
     return normalized
 
 
-def key_signature(table: dict[str, Any]) -> dict[str, Any]:
+def key_signature(path: Path, table: dict[str, Any]) -> dict[str, Any]:
     primary_key = table["primary_key"]
     return {
-        "table_name": table["table_name"],
+        "table_name": path.stem,
         "partition_key": normalized_key_signature(primary_key["partition_key"]),
         "sort_key": normalized_key_signature(primary_key.get("sort_key")),
     }
@@ -78,7 +78,6 @@ def validate_table(path: Path) -> list[str]:
 
     errors: list[str] = []
     required_fields = {
-        "table_name": str,
         "primary_key": dict,
         "attributes": dict,
     }
@@ -189,9 +188,9 @@ def check_compatibility(path: Path, base_ref: str) -> list[str]:
     base_table = load_git_base_table(path, base_ref)
     if base_table is None:
         return []
-    base_signature = key_signature(base_table)
+    base_signature = key_signature(path, base_table)
 
-    current_signature = key_signature(current)
+    current_signature = key_signature(path, current)
     if base_signature != current_signature:
         return [
             f"{repo_relative(path)}: primary/sort key changed from "

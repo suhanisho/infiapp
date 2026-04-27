@@ -8,13 +8,13 @@ dynamodb/<agent_name>/<table_id>.json
 
 Required fields:
 
-- `table_name`: deployed DynamoDB table name.
 - `primary_key.partition_key`: object with `name` and repo scalar `type`.
 - `primary_key.sort_key`: object with `name` and repo scalar `type`, or `null`.
 - `attributes`: object mapping attribute names to repo scalar types.
 
 Inferred/defaulted fields:
 
+- The deployed DynamoDB table name is inferred from the JSON filename.
 - The owning agent is inferred from the parent folder name.
 - Billing mode is hardcoded to `PAY_PER_REQUEST`.
 

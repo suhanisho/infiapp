@@ -19,6 +19,7 @@ from repo_tools.common import (
     iter_agent_dirs,
     iter_table_paths,
     load_json,
+    load_table_spec,
 )
 
 
@@ -57,12 +58,7 @@ def python_type_name(attribute_type: str) -> str:
 
 
 def load_tables() -> list[dict[str, Any]]:
-    tables: list[dict[str, Any]] = []
-    for path in iter_table_paths():
-        table = load_json(path)
-        table["owner_agent"] = path.parent.name
-        tables.append(table)
-    return tables
+    return [load_table_spec(path) for path in iter_table_paths()]
 
 
 def load_agents() -> list[dict[str, Any]]:

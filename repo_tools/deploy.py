@@ -26,6 +26,7 @@ from repo_tools.common import (
     iter_agent_dirs,
     iter_table_paths,
     load_json,
+    load_table_spec,
 )
 from repo_tools.python_dependencies import resolve_dependency_names
 
@@ -137,7 +138,7 @@ def external_agent_names() -> list[str]:
 
 def deploy_tables() -> None:
     for path in iter_table_paths():
-        table = load_json(path)
+        table = load_table_spec(path)
         table_name = table["table_name"]
         code, _ = aws_json(["aws", "dynamodb", "describe-table", "--table-name", table_name])
         if code == 0:
@@ -174,7 +175,7 @@ def deploy_tables() -> None:
 
 
 def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
-    return [load_json(path) for path in iter_table_paths() if path.parent.name == agent_name]
+    return [load_table_spec(path) for path in iter_table_paths() if path.parent.name == agent_name]
 
 
 def ensure_agent_role(agent_name: str) -> str:
