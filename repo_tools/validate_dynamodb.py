@@ -22,33 +22,14 @@ from repo_tools.common import (
 VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean", "List", "Map"}
 VALID_KEY_TYPES = {"String", "Number", "Binary"}
 INFERRED_OR_DEFAULTED_FIELDS = {"table_name", "owner_agent", "billing_mode"}
-LEGACY_TYPE_NAMES = {
-    "S": "String",
-    "N": "Number",
-    "B": "Binary",
-}
-
-
-def normalize_type_name(type_name: object) -> object:
-    if isinstance(type_name, str):
-        return LEGACY_TYPE_NAMES.get(type_name, type_name)
-    return type_name
-
-
-def normalized_key_signature(key: object) -> object:
-    if not isinstance(key, dict):
-        return key
-    normalized = dict(key)
-    normalized["type"] = normalize_type_name(normalized.get("type"))
-    return normalized
 
 
 def key_signature(path: Path, table: dict[str, Any]) -> dict[str, Any]:
     primary_key = table["primary_key"]
     return {
         "table_name": path.stem,
-        "partition_key": normalized_key_signature(primary_key["partition_key"]),
-        "sort_key": normalized_key_signature(primary_key.get("sort_key")),
+        "partition_key": primary_key["partition_key"],
+        "sort_key": primary_key.get("sort_key"),
     }
 
 
