@@ -24,8 +24,12 @@ Supported attribute types:
 - `Number`
 - `Binary`
 - `Boolean`
+- `List`
+- `Map`
 
-Partition and sort keys must use `String`, `Number`, or `Binary`. Repo tools map these to DynamoDB API types `S`, `N`, and `B` during deploy and deployed-state verification.
+`List` and `Map` are for non-key attributes and generate Python helper types of `list[Any]` and `dict[str, Any]`.
+
+Partition and sort keys must use `String`, `Number`, or `Binary`. Repo tools map these scalar key types to DynamoDB API types `S`, `N`, and `B` during deploy and deployed-state verification.
 
 Backwards compatibility:
 

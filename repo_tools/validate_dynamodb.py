@@ -19,7 +19,7 @@ from repo_tools.common import (
     repo_relative,
 )
 
-VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean"}
+VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean", "List", "Map"}
 VALID_KEY_TYPES = {"String", "Number", "Binary"}
 INFERRED_OR_DEFAULTED_FIELDS = {"table_name", "owner_agent", "billing_mode"}
 LEGACY_TYPE_NAMES = {

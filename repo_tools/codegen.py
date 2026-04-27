@@ -104,6 +104,8 @@ def python_type_name(attribute_type: str) -> str:
         "Number": "int | float",
         "Binary": "bytes",
         "Boolean": "bool",
+        "List": "list[Any]",
+        "Map": "dict[str, Any]",
     }.get(attribute_type, "Any")
 
 
