@@ -83,6 +83,7 @@ Run all agent checks:
 ```bash
 python -m repo_tools validate-agents
 python -m repo_tools test-agents
+python -m repo_tools typecheck-agents
 ```
 
 The GitHub workflow `.github/workflows/test-agents.yml` runs these checks on pull requests and pushes to `main`.

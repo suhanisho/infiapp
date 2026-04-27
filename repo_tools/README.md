@@ -44,6 +44,12 @@ Run agent tests:
 python -m repo_tools test-agents
 ```
 
+Type check agents:
+
+```bash
+python -m repo_tools typecheck-agents
+```
+
 Run WebUI package tests:
 
 ```bash

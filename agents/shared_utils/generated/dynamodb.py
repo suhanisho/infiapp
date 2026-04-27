@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 _DYNAMODB_RESOURCE: Any | None = None
 
@@ -68,7 +68,10 @@ def put_sample_messages(
     *,
     dynamodb_resource: Any | None = None,
 ) -> dict[str, Any]:
-    return _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).put_item(Item=dict(item))
+    return cast(
+        dict[str, Any],
+        _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
 
 
 def get_sample_messages(
@@ -97,12 +100,15 @@ def delete_sample_messages(
     *,
     dynamodb_resource: Any | None = None,
 ) -> dict[str, Any]:
-    return _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).delete_item(
-        Key=_build_key(
-            SAMPLE_MESSAGES_TABLE,
-            app_name,
-            message_id,
-        )
+    return cast(
+        dict[str, Any],
+        _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                SAMPLE_MESSAGES_TABLE,
+                app_name,
+                message_id,
+            )
+        ),
     )
 
 

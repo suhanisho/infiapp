@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from repo_tools.common import REPO_ROOT
+from repo_tools.common import AGENTS_DIR, REPO_ROOT, iter_agent_dirs
 
 
-def run(command: Sequence[str]) -> None:
-    subprocess.run(list(command), cwd=REPO_ROOT, check=True)
+def run(command: Sequence[str], *, cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
+    subprocess.run(list(command), cwd=cwd, check=True, env=env)
 
 
 def python_command(*args: str) -> list[str]:
@@ -47,6 +49,42 @@ def test_agents() -> None:
     run(python_command("-m", "unittest", "discover", "-s", "agents", "-p", "test_*.py"))
 
 
+def typecheck_agents() -> None:
+    shared_utils_dir = AGENTS_DIR / "shared_utils"
+    config_file = REPO_ROOT / "pyproject.toml"
+    cache_dir = REPO_ROOT / ".mypy_cache"
+    mypy_base_command = python_command(
+        "-m",
+        "mypy",
+        "--config-file",
+        str(config_file),
+        "--cache-dir",
+        str(cache_dir),
+        ".",
+    )
+    run(mypy_base_command, cwd=shared_utils_dir)
+    for agent_dir in iter_agent_dirs():
+        code_env = os.environ.copy()
+        code_env["MYPYPATH"] = os.pathsep.join(
+            [
+                str(shared_utils_dir),
+                code_env.get("MYPYPATH", ""),
+            ]
+        )
+        run(mypy_base_command, cwd=agent_dir / "code", env=code_env)
+        test_dir = agent_dir / "test"
+        if test_dir.exists():
+            test_env = os.environ.copy()
+            test_env["MYPYPATH"] = os.pathsep.join(
+                [
+                    str(agent_dir / "code"),
+                    str(shared_utils_dir),
+                    test_env.get("MYPYPATH", ""),
+                ]
+            )
+            run(mypy_base_command, cwd=test_dir, env=test_env)
+
+
 def test_web() -> None:
     run(npm_webui_command("test"))
 
@@ -67,6 +105,7 @@ def check() -> None:
     validate()
     codegen_check()
     test_agents()
+    typecheck_agents()
     test_web()
     build_web()
 
@@ -78,6 +117,7 @@ COMMANDS = {
     "codegen": codegen,
     "codegen-check": codegen_check,
     "test-agents": test_agents,
+    "typecheck-agents": typecheck_agents,
     "test-web": test_web,
     "build-web": build_web,
     "test-web-e2e": test_web_e2e,

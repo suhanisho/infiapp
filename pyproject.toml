@@ -14,7 +14,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "mypy==1.20.2",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*"]
+ignore_missing_imports = true
 
 [tool.setuptools.packages.find]
 include = ["repo_tools*"]

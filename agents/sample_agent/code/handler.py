@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from slugify import slugify
 
@@ -82,4 +82,4 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
 def local_call(message: str = "sample message from local") -> dict[str, Any]:
     """Convenience function used by local tooling and tests."""
     response = lambda_handler({"source": "local", "message": message})
-    return json.loads(response["body"])
+    return cast(dict[str, Any], json.loads(response["body"]))
