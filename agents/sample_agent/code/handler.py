@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, NamedTuple
+from typing import Any
 
 from generated.dynamodb import SampleMessagesItem, put_sample_messages, query_sample_messages_by_message_id_range_page
 from response import json_response
@@ -13,11 +12,6 @@ from response import json_response
 APP_NAME = "infiapp"
 DEFAULT_PAGE_LIMIT = 10
 MAX_PAGE_LIMIT = 50
-
-
-class StoreResult(NamedTuple):
-    stored: bool
-    item: SampleMessagesItem
 
 
 def _parse_limit(value: object) -> int:
@@ -44,7 +38,7 @@ def _format_message(item: SampleMessagesItem) -> dict[str, str]:
     }
 
 
-def _store_message(message: str) -> StoreResult:
+def _store_message(message: str) -> SampleMessagesItem:
     created_at = datetime.now(timezone.utc).isoformat()
     item: SampleMessagesItem = {
         "app_name": APP_NAME,
@@ -52,17 +46,11 @@ def _store_message(message: str) -> StoreResult:
         "created_at": created_at,
         "message": message,
     }
-    if not os.environ.get("AWS_EXECUTION_ENV"):
-        return StoreResult(False, item)
-
     put_sample_messages(item)
-    return StoreResult(True, item)
+    return item
 
 
 def _list_messages(limit: int, next_key: dict[str, Any] | None) -> dict[str, Any]:
-    if not os.environ.get("AWS_EXECUTION_ENV"):
-        return {"messages": [], "nextKey": None}
-
     page = query_sample_messages_by_message_id_range_page(
         APP_NAME,
         exclusive_start_key=next_key,
@@ -99,11 +87,11 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
     if not message:
         return json_response(400, {"error": "message is required"})
 
-    store_result = _store_message(message)
+    item = _store_message(message)
     body = {
         "action": "store_message",
         "message": "message stored",
-        "item": _format_message(store_result.item),
-        "stored": store_result.stored,
+        "item": _format_message(item),
+        "stored": True,
     }
     return json_response(200, body)
