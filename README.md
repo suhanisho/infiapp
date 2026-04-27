@@ -87,14 +87,16 @@ Compatibility rules:
 
 ## WebUI
 
-`webUI/` is a single Next.js App Router application. It has one starter page:
+`webUI/` is a single Next.js App Router application. It is the user-facing web app for the repo.
 
-- Displays `Hi from infiapp`.
-- Shows a message input and a button that calls `/api/sample`.
-- `/api/sample` uses the generated external agent client.
-- In local development the generated client uses the mock and echoes the submitted message.
-- In production it calls the configured Lambda Function URL.
-- `sample_agent` stores submitted messages in `sample_messages` and returns the latest submitted message as `lastMessage`.
+Conventions:
+
+- Use generated agent helpers from `webUI/src/lib/generated/agents.ts` when the WebUI calls external agents.
+- Use generated mocks from `webUI/src/lib/generated/mockAgents.ts` for local development and tests.
+- Keep API routes under `webUI/app/api/` thin; they should translate HTTP requests into generated agent-helper calls.
+- Add WebUI package tests for generated-client behavior and other non-visual logic.
+- Add curl smoke coverage for important API endpoints in `.github/workflows/test-webUI.yml`.
+- Add Playwright screenshot coverage for important user workflows, including phone-sized viewports.
 
 Required WebUI secrets and environment variables:
 
