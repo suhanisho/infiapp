@@ -174,32 +174,19 @@ No need to install the Vercel GitHub app for this repo. Infiapp deploys the WebU
 
 Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**.
 
-The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. It also creates a Vercel OIDC role that can invoke external agents. Agent specs do not contain IAM policy JSON.
+After setup, deploy from GitHub Actions:
 
-Deploy manually from GitHub Actions after changes land on `main`. Do not deploy from a local machine. The deploy workflow runs:
+1. Merge the desired changes to `main`.
+2. Open **Actions > deploy** in GitHub.
+3. Select **Run workflow** on the `main` branch.
+4. Wait for the workflow to finish.
 
-```bash
-python -m repo_tools.deploy
-```
-
-The deploy tool is deliberately small and auditable. The GitHub Actions workflow uses it to create or update DynamoDB tables, package Lambda agents, configure Vercel OIDC access, and deploy the WebUI with Vercel.
-
-The deploy workflow manages these Vercel production environment variables:
-
-- `AWS_REGION`
-- `AWS_ROLE_ARN`
-- `INFIAPP_AGENT_BACKEND_MODE=aws_oidc`
+Do not deploy from a local machine.
 
 ## Deployed State Verification
 
-`.github/workflows/verify-deployed-state.yml` is manually triggered and only runs from `main`. It compares the current deployed infrastructure against repo definitions:
+Verify deployed infrastructure from GitHub Actions:
 
-```bash
-python -m repo_tools.check_deployed_state
-```
-
-It verifies:
-
-- DynamoDB tables exist with matching primary and sort keys.
-- Lambda functions exist for every agent spec.
-- Vercel OIDC access exists for invoking external agents.
+1. Open **Actions > verify-deployed-state** in GitHub.
+2. Select **Run workflow** on the `main` branch.
+3. Wait for the workflow to finish.
