@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 _DYNAMODB_RESOURCE: Any | None = None
 
@@ -40,6 +40,15 @@ def _build_key(
         raise ValueError(f"{table_definition['table_name']} does not have a sort key.")
     return key
 
+
+class SampleMessagesItem(TypedDict):
+    """Typed representation of a row in the sample_messages table."""
+
+    app_name: str
+    created_at: str
+    message: str
+    message_id: str
+
 SAMPLE_MESSAGES_TABLE: dict[str, Any] = {
     "attributes": {
         "app_name": "String",
@@ -64,7 +73,7 @@ TABLES: dict[str, dict[str, Any]] = {
 
 
 def put_sample_messages(
-    item: Mapping[str, Any],
+    item: SampleMessagesItem,
     *,
     dynamodb_resource: Any | None = None,
 ) -> dict[str, Any]:
@@ -79,7 +88,7 @@ def get_sample_messages(
     message_id: Any,
     *,
     dynamodb_resource: Any | None = None,
-) -> dict[str, Any] | None:
+) -> SampleMessagesItem | None:
     response = _table(
         SAMPLE_MESSAGES_TABLE,
         dynamodb_resource,
@@ -91,7 +100,20 @@ def get_sample_messages(
         )
     )
     item = response.get("Item")
-    return dict(item) if isinstance(item, dict) else None
+    return cast(SampleMessagesItem, item) if isinstance(item, dict) else None
+
+
+def query_sample_messages_item(
+    app_name: Any,
+    message_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> SampleMessagesItem | None:
+    return get_sample_messages(
+        app_name,
+        message_id,
+        dynamodb_resource=dynamodb_resource,
+    )
 
 
 def delete_sample_messages(
@@ -112,6 +134,36 @@ def delete_sample_messages(
     )
 
 
+def query_sample_messages_by_message_id_range(
+    app_name: Any,
+    *,
+    start_message_id: Any | None = None,
+    end_message_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[SampleMessagesItem]:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("app_name").eq(app_name)
+    if start_message_id is not None and end_message_id is not None:
+        key_condition = key_condition & Key("message_id").between(start_message_id, end_message_id)
+    elif start_message_id is not None:
+        key_condition = key_condition & Key("message_id").gte(start_message_id)
+    elif end_message_id is not None:
+        key_condition = key_condition & Key("message_id").lte(end_message_id)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).query(**query_args)
+    return [cast(SampleMessagesItem, item) for item in response.get("Items", [])]
+
+
 def query_sample_messages(
     app_name: Any,
     *,
@@ -119,15 +171,11 @@ def query_sample_messages(
     scan_index_forward: bool = True,
     consistent_read: bool = False,
     limit: int | None = None,
-) -> list[dict[str, Any]]:
-    from boto3.dynamodb.conditions import Key
-
-    query_args: dict[str, Any] = {
-        "KeyConditionExpression": Key("app_name").eq(app_name),
-        "ScanIndexForward": scan_index_forward,
-        "ConsistentRead": consistent_read,
-    }
-    if limit is not None:
-        query_args["Limit"] = limit
-    response = _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).query(**query_args)
-    return [dict(item) for item in response.get("Items", [])]
+) -> list[SampleMessagesItem]:
+    return query_sample_messages_by_message_id_range(
+        app_name,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )

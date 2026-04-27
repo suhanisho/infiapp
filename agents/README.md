@@ -54,7 +54,7 @@ Put Lambda implementation files under `code/`. The handler named in `spec.json` 
 
 Shared Python utilities belong in `agents/shared_utils/`. Agent tests and deployment packaging make this folder importable for every agent.
 
-Generated shared utilities live under `agents/shared_utils/generated/`. DynamoDB table specs generate per-table read and write helpers for agents, so agent code should use those helpers instead of hand-building table clients. Do not edit generated files by hand; update specs or `repo_tools/codegen.py`, then run:
+Generated shared utilities live under `agents/shared_utils/generated/`. DynamoDB table specs generate a typed item object for every table plus helpers to put an item, query one item by key, and query a sort-key range. Agent code should use those helpers instead of hand-building table clients. Do not edit generated files by hand; update specs or `repo_tools/codegen.py`, then run:
 
 ```bash
 python -m repo_tools codegen

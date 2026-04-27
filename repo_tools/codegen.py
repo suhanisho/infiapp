@@ -39,6 +39,19 @@ def pascal_name(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_") if part)
 
 
+def typed_dict_name(table_name: str) -> str:
+    return f"{pascal_name(snake_identifier(table_name))}Item"
+
+
+def python_type_name(attribute_type: str) -> str:
+    return {
+        "String": "str",
+        "Number": "int | float",
+        "Binary": "bytes",
+        "Boolean": "bool",
+    }.get(attribute_type, "Any")
+
+
 def load_tables() -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     for path in iter_table_paths():
@@ -83,7 +96,7 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
         "from __future__ import annotations",
         "",
         "from collections.abc import Mapping",
-        "from typing import Any, cast",
+        "from typing import Any, TypedDict, cast",
         "",
         "_DYNAMODB_RESOURCE: Any | None = None",
         "",
@@ -123,6 +136,16 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
     ]
 
     for table in sorted(tables, key=lambda item: item["table_name"]):
+        item_type_name = typed_dict_name(table["table_name"])
+        lines.append("")
+        lines.append(f"class {item_type_name}(TypedDict):")
+        lines.append(f'    """Typed representation of a row in the {table["table_name"]} table."""')
+        lines.append("")
+        for attribute_name, attribute_type in sorted(table["attributes"].items()):
+            lines.append(f"    {snake_identifier(attribute_name)}: {python_type_name(attribute_type)}")
+        lines.append("")
+
+    for table in sorted(tables, key=lambda item: item["table_name"]):
         table_value = {
             "table_name": table["table_name"],
             "partition_key": table["primary_key"]["partition_key"],
@@ -142,6 +165,7 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
         table_name = table["table_name"]
         table_identifier = snake_identifier(table_name)
         table_constant = constant_name(table_name)
+        item_type_name = typed_dict_name(table_name)
         partition_key = table["primary_key"]["partition_key"]["name"]
         partition_arg = snake_identifier(partition_key)
         sort_key = table["primary_key"].get("sort_key")
@@ -152,7 +176,7 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
             [
                 "",
                 f"def put_{table_identifier}(",
-                "    item: Mapping[str, Any],",
+                f"    item: {item_type_name},",
                 "    *,",
                 "    dynamodb_resource: Any | None = None,",
                 ") -> dict[str, Any]:",
@@ -173,7 +197,7 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     f"    {sort_arg}: Any,",
                     "    *,",
                     "    dynamodb_resource: Any | None = None,",
-                    ") -> dict[str, Any] | None:",
+                    f") -> {item_type_name} | None:",
                     "    response = _table(",
                     f"        {table_constant},",
                     "        dynamodb_resource,",
@@ -185,7 +209,20 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     "        )",
                     "    )",
                     '    item = response.get("Item")',
-                    "    return dict(item) if isinstance(item, dict) else None",
+                    f"    return cast({item_type_name}, item) if isinstance(item, dict) else None",
+                    "",
+                    "",
+                    f"def query_{table_identifier}_item(",
+                    f"    {partition_arg}: Any,",
+                    f"    {sort_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    f") -> {item_type_name} | None:",
+                    f"    return get_{table_identifier}(",
+                    f"        {partition_arg},",
+                    f"        {sort_arg},",
+                    "        dynamodb_resource=dynamodb_resource,",
+                    "    )",
                     "",
                     "",
                     f"def delete_{table_identifier}(",
@@ -206,6 +243,36 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     "    )",
                     "",
                     "",
+                    f"def query_{table_identifier}_by_{sort_arg}_range(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    f"    start_{sort_arg}: Any | None = None,",
+                    f"    end_{sort_arg}: Any | None = None,",
+                    "    dynamodb_resource: Any | None = None,",
+                    "    scan_index_forward: bool = True,",
+                    "    consistent_read: bool = False,",
+                    "    limit: int | None = None,",
+                    f") -> list[{item_type_name}]:",
+                    "    from boto3.dynamodb.conditions import Key",
+                    "",
+                    f'    key_condition = Key("{partition_key}").eq({partition_arg})',
+                    f"    if start_{sort_arg} is not None and end_{sort_arg} is not None:",
+                    f'        key_condition = key_condition & Key("{sort_key_name}").between(start_{sort_arg}, end_{sort_arg})',
+                    f"    elif start_{sort_arg} is not None:",
+                    f'        key_condition = key_condition & Key("{sort_key_name}").gte(start_{sort_arg})',
+                    f"    elif end_{sort_arg} is not None:",
+                    f'        key_condition = key_condition & Key("{sort_key_name}").lte(end_{sort_arg})',
+                    "    query_args: dict[str, Any] = {",
+                    '        "KeyConditionExpression": key_condition,',
+                    '        "ScanIndexForward": scan_index_forward,',
+                    '        "ConsistentRead": consistent_read,',
+                    "    }",
+                    "    if limit is not None:",
+                    '        query_args["Limit"] = limit',
+                    f"    response = _table({table_constant}, dynamodb_resource).query(**query_args)",
+                    f'    return [cast({item_type_name}, item) for item in response.get("Items", [])]',
+                    "",
+                    "",
                     f"def query_{table_identifier}(",
                     f"    {partition_arg}: Any,",
                     "    *,",
@@ -213,18 +280,14 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     "    scan_index_forward: bool = True,",
                     "    consistent_read: bool = False,",
                     "    limit: int | None = None,",
-                    ") -> list[dict[str, Any]]:",
-                    "    from boto3.dynamodb.conditions import Key",
-                    "",
-                    "    query_args: dict[str, Any] = {",
-                    f'        "KeyConditionExpression": Key("{partition_key}").eq({partition_arg}),',
-                    '        "ScanIndexForward": scan_index_forward,',
-                    '        "ConsistentRead": consistent_read,',
-                    "    }",
-                    "    if limit is not None:",
-                    '        query_args["Limit"] = limit',
-                    f"    response = _table({table_constant}, dynamodb_resource).query(**query_args)",
-                    '    return [dict(item) for item in response.get("Items", [])]',
+                    f") -> list[{item_type_name}]:",
+                    f"    return query_{table_identifier}_by_{sort_arg}_range(",
+                    f"        {partition_arg},",
+                    "        dynamodb_resource=dynamodb_resource,",
+                    "        scan_index_forward=scan_index_forward,",
+                    "        consistent_read=consistent_read,",
+                    "        limit=limit,",
+                    "    )",
                     "",
                     "",
                 ]
@@ -236,12 +299,23 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     f"    {partition_arg}: Any,",
                     "    *,",
                     "    dynamodb_resource: Any | None = None,",
-                    ") -> dict[str, Any] | None:",
+                    f") -> {item_type_name} | None:",
                     f"    response = _table({table_constant}, dynamodb_resource).get_item(",
                     f"        Key=_build_key({table_constant}, {partition_arg})",
                     "    )",
                     '    item = response.get("Item")',
-                    "    return dict(item) if isinstance(item, dict) else None",
+                    f"    return cast({item_type_name}, item) if isinstance(item, dict) else None",
+                    "",
+                    "",
+                    f"def query_{table_identifier}_item(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    f") -> {item_type_name} | None:",
+                    f"    return get_{table_identifier}(",
+                    f"        {partition_arg},",
+                    "        dynamodb_resource=dynamodb_resource,",
+                    "    )",
                     "",
                     "",
                     f"def delete_{table_identifier}(",

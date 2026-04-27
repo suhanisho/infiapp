@@ -10,7 +10,7 @@ from typing import Any, NamedTuple, cast
 
 from slugify import slugify
 
-from generated.dynamodb import SAMPLE_MESSAGES_TABLE, put_sample_messages, query_sample_messages
+from generated.dynamodb import SAMPLE_MESSAGES_TABLE, put_sample_messages, query_sample_messages_by_message_id_range
 from response import json_response
 
 
@@ -51,7 +51,12 @@ def _store_message(message: str) -> StoredMessage:
             "message": message,
         }
     )
-    latest_items = query_sample_messages("infiapp", scan_index_forward=False, consistent_read=True, limit=1)
+    latest_items = query_sample_messages_by_message_id_range(
+        "infiapp",
+        scan_index_forward=False,
+        consistent_read=True,
+        limit=1,
+    )
     if not latest_items:
         return StoredMessage(True, message)
     return StoredMessage(True, str(latest_items[0].get("message", message)))

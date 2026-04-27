@@ -50,7 +50,7 @@ See [agents/README.md](agents/README.md) for the required folder structure, `spe
 
 ## DynamoDB
 
-DynamoDB tables are declared as JSON specs under `dynamodb/<agent_name>/`. Each table belongs to the agent named by its parent folder, and repo tools generate shared Python helpers from these specs.
+DynamoDB tables are declared as JSON specs under `dynamodb/<agent_name>/`. Each table belongs to the agent named by its parent folder, and repo tools generate shared Python helpers from these specs, including typed item objects, single-item reads, sort-key range queries, and item puts.
 
 See [dynamodb/README.md](dynamodb/README.md) for the table spec format, supported attribute types, defaults, and key compatibility rules.
 
