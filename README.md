@@ -42,41 +42,9 @@ webUI/
 
 ## Agents
 
-Each folder in `agents/` except `shared_utils/` is a Lambda agent.
+Agents are Python Lambda functions defined by folder-level specs. Each agent owns its code, tests, and any DynamoDB tables declared for it. Agents can be `internal` or `external`; external agents get generated WebUI clients.
 
-Agent folders must contain:
-
-```text
-agents/<agent_name>/
-  code/
-    handler.py
-  test/
-    test_*.py
-  spec.json
-```
-
-`spec.json` is intentionally small:
-
-```json
-{
-  "name": "sample_agent",
-  "description": "Stores and echoes sample messages for the starter app.",
-  "connectivity": "external",
-  "handler": "handler.lambda_handler"
-}
-```
-
-Rules:
-
-- `name` must match the folder name.
-- `connectivity` must be `internal` or `external`.
-- Runtime is always Python 3.11.
-- Lambda type is always code.
-- Agents are manually triggered by default.
-- Environment variables and custom triggers are not part of the initial framework.
-- Each agent automatically receives full permissions to its own DynamoDB tables.
-- Shared code belongs in `agents/shared_utils/` and is importable by every agent test and Lambda package.
-- External agents are generated into `webUI/src/lib/generated/agents.ts` and can be called from the WebUI.
+See `agents/README.md` for the required folder structure, `spec.json` fields, framework defaults, shared utilities, and test expectations.
 
 ## DynamoDB
 
