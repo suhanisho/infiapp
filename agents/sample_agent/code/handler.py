@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -14,25 +13,6 @@ from response import json_response
 APP_NAME = "infiapp"
 DEFAULT_PAGE_LIMIT = 10
 MAX_PAGE_LIMIT = 50
-
-
-def _payload_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
-    if not event:
-        return {}
-
-    body = event.get("body")
-    if isinstance(body, str) and body:
-        try:
-            parsed_body = json.loads(body)
-        except json.JSONDecodeError:
-            parsed_body = {}
-        if isinstance(parsed_body, dict):
-            return parsed_body
-
-    if isinstance(body, dict):
-        return body
-
-    return event
 
 
 class StoreResult(NamedTuple):
@@ -99,7 +79,7 @@ def _list_messages(limit: int, next_key: dict[str, Any] | None) -> dict[str, Any
 def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
     """Store or list sample messages."""
     _ = context
-    payload = _payload_from_event(event)
+    payload = event or {}
     action = str(payload.get("action", "store_message"))
 
     if action == "list_messages":

@@ -45,13 +45,6 @@ class SampleAgentTest(unittest.TestCase):
         self.assertNotIn("mocked", body)
         self.assertFalse(body["stored"])
 
-    def test_lambda_handler_accepts_function_url_body(self) -> None:
-        response = lambda_handler({"body": json.dumps({"action": "store_message", "message": "from body"})})
-
-        self.assertEqual(response["statusCode"], 200)
-        body = json.loads(response["body"])
-        self.assertEqual(body["item"]["message"], "from body")
-
     def test_lambda_handler_lists_messages_shape(self) -> None:
         response = lambda_handler({"action": "list_messages", "limit": 5})
 
