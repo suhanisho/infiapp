@@ -122,9 +122,18 @@ def vercel_request_json(
 
 def get_aws_account_id() -> str:
     code, data = aws_json(["aws", "sts", "get-caller-identity"])
-    if code != 0 or not isinstance(data.get("Account"), str):
+    account_id = data.get("Account")
+    if code != 0 or not isinstance(account_id, str):
         raise RuntimeError("Unable to determine AWS account id from configured credentials")
-    return data["Account"]
+    return account_id
+
+
+def get_role_arn(role_data: dict[str, Any], role_name: str) -> str:
+    role = role_data.get("Role")
+    role_arn = role.get("Arn") if isinstance(role, dict) else None
+    if not isinstance(role_arn, str):
+        raise RuntimeError(f"Unable to determine ARN for IAM role {role_name}")
+    return role_arn
 
 
 def external_agent_names() -> list[str]:
@@ -250,7 +259,7 @@ def ensure_agent_role(agent_name: str) -> str:
             json.dumps(policy),
         ]
     )
-    return role_data["Role"]["Arn"]
+    return get_role_arn(role_data, role_name)
 
 
 def copy_tree_contents(source_root: Path, target_root: Path) -> None:
@@ -510,7 +519,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
                 json.dumps(trust_policy),
             ]
         )
-        role_arn = role_data["Role"]["Arn"]
+        role_arn = get_role_arn(role_data, VERCEL_AGENT_ROLE_NAME)
     else:
         run(
             [
@@ -528,7 +537,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
         role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
         if role_code != 0:
             raise RuntimeError(f"Unable to create or load IAM role {VERCEL_AGENT_ROLE_NAME}")
-        role_arn = role_data["Role"]["Arn"]
+        role_arn = get_role_arn(role_data, VERCEL_AGENT_ROLE_NAME)
 
     run(
         [
