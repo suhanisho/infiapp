@@ -6,7 +6,7 @@ Hard rule: never push directly to `main`. Work on a branch and open a pull reque
 
 Expected workflow:
 
-1. Install Python dependencies with `python -m repo_tools install-python` after venv activation.
+1. Install Python dependencies with `python -m pip install ".[dev]"` after venv activation.
 2. Validate specs with `python -m repo_tools validate`.
 3. Regenerate framework code with `python -m repo_tools codegen`.
 4. Run agent tests with `python -m repo_tools test-agents`.

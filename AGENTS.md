@@ -10,7 +10,7 @@ Conventions for coding agents:
 - Keep shared Python code in `agents/shared_utils/`.
 - Keep DynamoDB table definitions under `dynamodb/<agent_name>/`; ownership is inferred from the folder name.
 - Keep Python dependency pins in root `pyproject.toml`; agent specs should list package names in `required_dependencies`.
-- Run `python -m repo_tools install-python` after changing Python dependencies.
+- Run `python -m pip install ".[dev]"` after changing Python dependencies.
 - Do not manually edit files under generated folders; run `python -m repo_tools codegen`.
 - Run `python -m repo_tools check` before considering the work complete.
 

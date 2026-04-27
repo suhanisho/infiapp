@@ -14,10 +14,10 @@ Run all repo checks:
 python -m repo_tools check
 ```
 
-Install Python dependencies:
+Install Python dependencies from `pyproject.toml`, including the `dev` extra:
 
 ```bash
-python -m repo_tools install-python
+python -m pip install ".[dev]"
 ```
 
 Validate specs:

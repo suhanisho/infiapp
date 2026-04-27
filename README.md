@@ -92,7 +92,7 @@ source .venv/bin/activate
 Install Python dependencies:
 
 ```bash
-python -m repo_tools install-python
+python -m pip install ".[dev]"
 ```
 
 Python dependencies are pinned in root `pyproject.toml`. Agent specs list dependency names in `required_dependencies`, and validation fails if an agent names a dependency that is not pinned there.

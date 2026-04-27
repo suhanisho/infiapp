@@ -67,7 +67,7 @@ Declare Python package needs in `required_dependencies` as package names only, s
 Install Python dependencies from an activated venv with:
 
 ```bash
-python -m repo_tools install-python
+python -m pip install ".[dev]"
 ```
 
 Deployment packages only the pinned dependencies named by each agent.
