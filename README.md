@@ -149,16 +149,31 @@ The generated files are:
 
 Required local tools:
 
-- Python 3.11 for Lambda parity.
-- Node.js 22.
-- npm 10 or newer.
+- Python 3.11 is needed. On macOS:
+
+  ```bash
+  brew install python@3.11
+  ```
+
+- Node.js 22 is needed. On macOS:
+
+  ```bash
+  brew install node@22
+  ```
+
+- npm 10 is needed. `node@22` installs npm; if needed, pin npm with:
+
+  ```bash
+  npm install -g npm@10
+  ```
+
 - AWS CLI v2 for deploy and deployed-state verification.
 - Vercel CLI, invoked through `npx vercel`, for WebUI deployment.
 
 Create a Python virtual environment:
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
