@@ -24,8 +24,7 @@ agents/<agent_name>/
   "connectivity": "external",
   "handler": "handler.lambda_handler",
   "required_dependencies": [
-    "boto3",
-    "python-slugify"
+    "boto3"
   ]
 }
 ```
@@ -62,7 +61,7 @@ python -m repo_tools codegen
 
 ## Dependencies
 
-Declare Python package needs in `required_dependencies` as package names only, such as `python-slugify`. Add the exact pinned version once in root `pyproject.toml` under `project.dependencies`.
+Declare Python package needs in `required_dependencies` as package names only, such as `boto3`. Add the exact pinned version once in root `pyproject.toml` under `project.dependencies`.
 
 Install Python dependencies from an activated venv with:
 

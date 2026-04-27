@@ -8,8 +8,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, NamedTuple, cast
 
-from slugify import slugify
-
 from generated.dynamodb import SAMPLE_MESSAGES_TABLE, put_sample_messages, query_sample_messages_by_message_id_range
 from response import json_response
 
@@ -71,11 +69,9 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
         return json_response(400, {"error": "message is required", "agent": "sample_agent"})
 
     stored_message = _store_message(message)
-    message_slug = slugify(message)
     body = {
         "message": f"lambda was called: {message}",
         "lastMessage": stored_message.last_message,
-        "messageSlug": message_slug,
         "agent": "sample_agent",
         "mocked": False,
         "stored": stored_message.stored,
