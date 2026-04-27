@@ -5,7 +5,7 @@ Infiapp is a minimal, opinionated framework for building web applications. It ab
 The framework keeps four concepts small and explicit:
 
 - **Agents** are AWS Lambda functions. Each agent owns its runtime code, tests, and `spec.json`.
-- **DynamoDB** tables are declared in repo specs. Tables are owned by agents and generated into typed helper APIs.
+- **DynamoDB** tables are declared in repo specs. Tables are owned by agents and generated into helper APIs for agent reads and writes.
 - **WebUI** is one Next.js application. External agents are exposed to it through generated API clients and mocks.
 - **Repo Tools** validate specs, generate code, run tests and manage infrastructure.
 

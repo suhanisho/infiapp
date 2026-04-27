@@ -6,11 +6,11 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from slugify import slugify
 
-from generated.dynamodb import SAMPLE_MESSAGES_TABLE
+from generated.dynamodb import SAMPLE_MESSAGES_TABLE, put_sample_messages, query_sample_messages
 from response import json_response
 
 
@@ -33,28 +33,28 @@ def _payload_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
     return event
 
 
-def _store_message(message: str) -> bool:
-    if not os.environ.get("AWS_EXECUTION_ENV"):
-        return False
+class StoredMessage(NamedTuple):
+    stored: bool
+    last_message: str
 
-    try:
-        import boto3  # type: ignore[import-not-found]
-    except ImportError:
-        return False
+
+def _store_message(message: str) -> StoredMessage:
+    if not os.environ.get("AWS_EXECUTION_ENV"):
+        return StoredMessage(False, message)
 
     created_at = datetime.now(timezone.utc).isoformat()
-    table_name = SAMPLE_MESSAGES_TABLE["table_name"]
-    dynamodb = boto3.resource("dynamodb")
-    table = dynamodb.Table(table_name)
-    table.put_item(
-        Item={
+    put_sample_messages(
+        {
             "app_name": "infiapp",
             "message_id": f"{created_at}#{uuid.uuid4()}",
             "created_at": created_at,
             "message": message,
         }
     )
-    return True
+    latest_items = query_sample_messages("infiapp", scan_index_forward=False, consistent_read=True, limit=1)
+    if not latest_items:
+        return StoredMessage(True, message)
+    return StoredMessage(True, str(latest_items[0].get("message", message)))
 
 
 def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
@@ -65,15 +65,15 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
     if not message:
         return json_response(400, {"error": "message is required", "agent": "sample_agent"})
 
-    stored = _store_message(message)
+    stored_message = _store_message(message)
     message_slug = slugify(message)
     body = {
         "message": f"lambda was called: {message}",
-        "lastMessage": message,
+        "lastMessage": stored_message.last_message,
         "messageSlug": message_slug,
         "agent": "sample_agent",
         "mocked": False,
-        "stored": stored,
+        "stored": stored_message.stored,
         "table": SAMPLE_MESSAGES_TABLE["table_name"],
     }
     return json_response(200, body)

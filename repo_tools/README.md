@@ -74,6 +74,6 @@ Do not edit generated files by hand. Update specs or generator code, then run `p
 
 Generated files:
 
-- `agents/shared_utils/generated/dynamodb.py`
+- `agents/shared_utils/generated/dynamodb.py`: DynamoDB table metadata plus per-table read and write helpers for agent code.
 - `webUI/src/lib/generated/agents.ts`
 - `webUI/src/lib/generated/mockAgents.ts`

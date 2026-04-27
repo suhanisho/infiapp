@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,15 @@ from repo_tools.common import (
 
 def constant_name(table_name: str) -> str:
     return f"{table_name.upper()}_TABLE"
+
+
+def snake_identifier(name: str) -> str:
+    identifier = re.sub(r"[^0-9a-zA-Z_]+", "_", name).strip("_").lower()
+    if not identifier:
+        return "table"
+    if identifier[0].isdigit():
+        return f"table_{identifier}"
+    return identifier
 
 
 def pascal_name(name: str) -> str:
@@ -61,6 +71,8 @@ def render_python_value(value: Any, indent: int = 0) -> str:
             lines.append(f"{child_prefix}{render_python_value(item, indent + 1)},")
         lines.append(f"{prefix}]")
         return "\n".join(lines)
+    if isinstance(value, str):
+        return json.dumps(value)
     return repr(value)
 
 
@@ -70,14 +82,49 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
         "",
         "from __future__ import annotations",
         "",
+        "from collections.abc import Mapping",
         "from typing import Any",
+        "",
+        "_DYNAMODB_RESOURCE: Any | None = None",
+        "",
+        "",
+        "def _get_dynamodb_resource(dynamodb_resource: Any | None = None) -> Any:",
+        "    if dynamodb_resource is not None:",
+        "        return dynamodb_resource",
+        "",
+        "    global _DYNAMODB_RESOURCE",
+        "    if _DYNAMODB_RESOURCE is None:",
+        "        import boto3",
+        "",
+        '        _DYNAMODB_RESOURCE = boto3.resource("dynamodb")',
+        "    return _DYNAMODB_RESOURCE",
+        "",
+        "",
+        "def _table(table_definition: Mapping[str, Any], dynamodb_resource: Any | None = None) -> Any:",
+        '    return _get_dynamodb_resource(dynamodb_resource).Table(str(table_definition["table_name"]))',
+        "",
+        "",
+        "def _build_key(",
+        "    table_definition: Mapping[str, Any],",
+        "    partition_key_value: Any,",
+        "    sort_key_value: Any | None = None,",
+        ") -> dict[str, Any]:",
+        '    partition_key = table_definition["partition_key"]',
+        '    key = {str(partition_key["name"]): partition_key_value}',
+        '    sort_key = table_definition.get("sort_key")',
+        "    if sort_key:",
+        "        if sort_key_value is None:",
+        '            raise ValueError(f"{table_definition[\'table_name\']} requires a sort key value.")',
+        '        key[str(sort_key["name"])] = sort_key_value',
+        "    elif sort_key_value is not None:",
+        '        raise ValueError(f"{table_definition[\'table_name\']} does not have a sort key.")',
+        "    return key",
         "",
     ]
 
     for table in sorted(tables, key=lambda item: item["table_name"]):
         table_value = {
             "table_name": table["table_name"],
-            "owner_agent": table["owner_agent"],
             "partition_key": table["primary_key"]["partition_key"],
             "sort_key": table["primary_key"].get("sort_key"),
             "attributes": table["attributes"],
@@ -90,7 +137,120 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
         lines.append(f"    {json.dumps(table['table_name'])}: {constant_name(table['table_name'])},")
     lines.append("}")
     lines.append("")
-    return "\n".join(lines)
+
+    for table in sorted(tables, key=lambda item: item["table_name"]):
+        table_name = table["table_name"]
+        table_identifier = snake_identifier(table_name)
+        table_constant = constant_name(table_name)
+        partition_key = table["primary_key"]["partition_key"]["name"]
+        partition_arg = snake_identifier(partition_key)
+        sort_key = table["primary_key"].get("sort_key")
+        sort_key_name = sort_key["name"] if sort_key else None
+        sort_arg = snake_identifier(sort_key_name) if sort_key_name else None
+
+        lines.extend(
+            [
+                "",
+                f"def put_{table_identifier}(",
+                "    item: Mapping[str, Any],",
+                "    *,",
+                "    dynamodb_resource: Any | None = None,",
+                ") -> dict[str, Any]:",
+                f"    return _table({table_constant}, dynamodb_resource).put_item(Item=dict(item))",
+                "",
+                "",
+            ]
+        )
+
+        if sort_key_name and sort_arg:
+            lines.extend(
+                [
+                    f"def get_{table_identifier}(",
+                    f"    {partition_arg}: Any,",
+                    f"    {sort_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    ") -> dict[str, Any] | None:",
+                    "    response = _table(",
+                    f"        {table_constant},",
+                    "        dynamodb_resource,",
+                    "    ).get_item(",
+                    "        Key=_build_key(",
+                    f"            {table_constant},",
+                    f"            {partition_arg},",
+                    f"            {sort_arg},",
+                    "        )",
+                    "    )",
+                    '    item = response.get("Item")',
+                    "    return dict(item) if isinstance(item, dict) else None",
+                    "",
+                    "",
+                    f"def delete_{table_identifier}(",
+                    f"    {partition_arg}: Any,",
+                    f"    {sort_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    ") -> dict[str, Any]:",
+                    f"    return _table({table_constant}, dynamodb_resource).delete_item(",
+                    "        Key=_build_key(",
+                    f"            {table_constant},",
+                    f"            {partition_arg},",
+                    f"            {sort_arg},",
+                    "        )",
+                    "    )",
+                    "",
+                    "",
+                    f"def query_{table_identifier}(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    "    scan_index_forward: bool = True,",
+                    "    consistent_read: bool = False,",
+                    "    limit: int | None = None,",
+                    ") -> list[dict[str, Any]]:",
+                    "    from boto3.dynamodb.conditions import Key",
+                    "",
+                    "    query_args: dict[str, Any] = {",
+                    f'        "KeyConditionExpression": Key("{partition_key}").eq({partition_arg}),',
+                    '        "ScanIndexForward": scan_index_forward,',
+                    '        "ConsistentRead": consistent_read,',
+                    "    }",
+                    "    if limit is not None:",
+                    '        query_args["Limit"] = limit',
+                    f"    response = _table({table_constant}, dynamodb_resource).query(**query_args)",
+                    '    return [dict(item) for item in response.get("Items", [])]',
+                    "",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"def get_{table_identifier}(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    ") -> dict[str, Any] | None:",
+                    f"    response = _table({table_constant}, dynamodb_resource).get_item(",
+                    f"        Key=_build_key({table_constant}, {partition_arg})",
+                    "    )",
+                    '    item = response.get("Item")',
+                    "    return dict(item) if isinstance(item, dict) else None",
+                    "",
+                    "",
+                    f"def delete_{table_identifier}(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    "    dynamodb_resource: Any | None = None,",
+                    ") -> dict[str, Any]:",
+                    f"    return _table({table_constant}, dynamodb_resource).delete_item(",
+                    f"        Key=_build_key({table_constant}, {partition_arg})",
+                    "    )",
+                    "",
+                    "",
+                ]
+            )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def render_mock_agents_ts(agents: list[dict[str, Any]]) -> str:
