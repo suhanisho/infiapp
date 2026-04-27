@@ -1,5 +1,5 @@
 {
-  "name": "infiloop",
+  "name": "infiapp",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -12,4 +12,3 @@
     "check": "npm run validate && npm run codegen:check && npm test && npm --prefix webUI run build"
   }
 }
-

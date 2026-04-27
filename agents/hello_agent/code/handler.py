@@ -1,4 +1,4 @@
-"""Starter Lambda agent for the Infiloop demo app."""
+"""Starter Lambda agent for the Infiapp demo app."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from generated.dynamodb import INFILOOP_USER_MESSAGES_TABLE
+from generated.dynamodb import INFIAPP_USER_MESSAGES_TABLE
 from response import json_response
 
 
@@ -41,12 +41,12 @@ def _store_message(message: str) -> bool:
         return False
 
     created_at = datetime.now(timezone.utc).isoformat()
-    table_name = INFILOOP_USER_MESSAGES_TABLE["table_name"]
+    table_name = INFIAPP_USER_MESSAGES_TABLE["table_name"]
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(table_name)
     table.put_item(
         Item={
-            "app_name": "infiloop",
+            "app_name": "infiapp",
             "message_id": f"{created_at}#{uuid.uuid4()}",
             "created_at": created_at,
             "message": message,
@@ -70,7 +70,7 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
         "agent": "hello_agent",
         "mocked": False,
         "stored": stored,
-        "table": INFILOOP_USER_MESSAGES_TABLE["table_name"],
+        "table": INFIAPP_USER_MESSAGES_TABLE["table_name"],
     }
     return json_response(200, body)
 

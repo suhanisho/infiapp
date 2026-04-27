@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate framework bindings from Infiloop specs."""
+"""Generate framework bindings from Infiapp specs."""
 
 from __future__ import annotations
 

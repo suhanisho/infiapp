@@ -24,7 +24,7 @@ class HelloAgentTest(unittest.TestCase):
         self.assertEqual(body["message"], "lambda was called: hello there")
         self.assertEqual(body["lastMessage"], "hello there")
         self.assertEqual(body["agent"], "hello_agent")
-        self.assertEqual(body["table"], "infiloop_user_messages")
+        self.assertEqual(body["table"], "infiapp_user_messages")
         self.assertFalse(body["stored"])
 
     def test_lambda_handler_accepts_function_url_body(self) -> None:

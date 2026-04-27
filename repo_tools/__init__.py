@@ -1,2 +1,1 @@
-"""Repository automation for Infiloop."""
-
+"""Repository automation for Infiapp."""

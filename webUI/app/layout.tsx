@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Infiloop",
-  description: "Minimal web app built with the Infiloop framework.",
+  title: "Infiapp",
+  description: "Minimal web app built with the Infiapp framework.",
 };
 
 export default function RootLayout({
@@ -17,4 +17,3 @@ export default function RootLayout({
     </html>
   );
 }
-

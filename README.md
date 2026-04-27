@@ -1,13 +1,13 @@
-# Infiloop
+# Infiapp
 
-Infiloop is a minimal, opinionated framework for building web applications. It abstracts infrastructure deployment and management into maintainable, secure repo conventions so builders can vibe code applications with a practical level of production readiness.
+Infiapp is a minimal, opinionated framework for building web applications. It abstracts infrastructure deployment and management into maintainable, secure repo conventions so builders can vibe code applications with a practical level of production readiness.
 
 The framework keeps four concepts small and explicit:
 
 - **Agents** are AWS Lambda functions. Each agent owns its runtime code, tests, and `spec.json`.
 - **DynamoDB** tables are declared in repo specs. Tables are owned by agents and generated into typed helper APIs.
 - **WebUI** is one Next.js application. External agents are exposed to it through generated API clients and mocks.
-- **Repo Tools** validate specs, generate code, configure CI, and compare deployed infrastructure with repo definitions.
+- **Repo Tools** validate specs, generate code, run tests and manage infrastructure.
 
 ## Repository Layout
 
@@ -84,7 +84,7 @@ Example:
 
 ```json
 {
-  "table_name": "infiloop_hello_calls",
+  "table_name": "infiapp_hello_calls",
   "owner_agent": "hello_agent",
   "billing_mode": "PAY_PER_REQUEST",
   "primary_key": {
@@ -113,22 +113,22 @@ Compatibility rules:
 - `owner_agent` must match the parent folder.
 - Partition key and sort key names and types are backwards compatible and must not change after deployment.
 - Non-key attributes may be added, changed, or removed.
-- The validator compares against `.infiloop/table-key-baseline.json` when present. Generate or refresh the baseline intentionally after the first accepted table definition.
+- The validator compares against `.infiapp/table-key-baseline.json` when present. Generate or refresh the baseline intentionally after the first accepted table definition.
 
 ## WebUI
 
 `webUI/` is a single Next.js App Router application. It has one starter page:
 
-- Displays `Hi from infiloop`.
+- Displays `Hi from infiapp`.
 - Shows a message input and a button that calls `/api/hello`.
 - `/api/hello` uses the generated external agent client.
 - In local development the generated client uses the mock and echoes the submitted message.
 - In production it calls the configured Lambda Function URL.
-- `hello_agent` stores submitted messages in `infiloop_user_messages` and returns the latest submitted message as `lastMessage`.
+- `hello_agent` stores submitted messages in `infiapp_user_messages` and returns the latest submitted message as `lastMessage`.
 
 Required WebUI secrets and environment variables:
 
-- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiloop`.
+- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
 - `HELLO_AGENT_URL`: production URL for the external `hello_agent` Lambda Function URL.
 
 ## Repo Tools
@@ -267,7 +267,7 @@ The deploy tool is deliberately small and auditable. It creates or updates Dynam
 Required runtime environment variables:
 
 - `HELLO_AGENT_URL`: set in Vercel production once the external Lambda Function URL exists. If this is missing, the WebUI uses its generated local mock.
-- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiloop`.
+- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
 
 ## Deployed State Verification
 

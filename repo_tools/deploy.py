@@ -73,7 +73,7 @@ def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
 
 def ensure_agent_role(agent_name: str) -> str:
     account_id = os.environ["AWS_ACCOUNT_ID"]
-    role_name = f"infiloop-{agent_name}-lambda-role"
+    role_name = f"infiapp-{agent_name}-lambda-role"
     role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", role_name])
     if role_code != 0:
         assume_role_policy = {
@@ -138,7 +138,7 @@ def ensure_agent_role(agent_name: str) -> str:
             "--role-name",
             role_name,
             "--policy-name",
-            "infiloop-agent-owned-tables",
+            "infiapp-agent-owned-tables",
             "--policy-document",
             json.dumps(policy),
         ]
@@ -219,7 +219,7 @@ def deploy_agents() -> None:
                             "--function-name",
                             function_name,
                             "--statement-id",
-                            "infiloop-public-function-url",
+                            "infiapp-public-function-url",
                             "--action",
                             "lambda:InvokeFunctionUrl",
                             "--principal",

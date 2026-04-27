@@ -27,5 +27,4 @@ Backwards compatibility:
 - Sort key presence, name, and type must not change.
 - Non-key attributes may be added, changed, or removed.
 
-`repo_tools/validate_dynamodb.py` validates every table and checks key compatibility against either Git history or `.infiloop/table-key-baseline.json` when that baseline exists.
-
+`repo_tools/validate_dynamodb.py` validates every table and checks key compatibility against either Git history or `.infiapp/table-key-baseline.json` when that baseline exists.

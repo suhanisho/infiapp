@@ -13,7 +13,7 @@ WEBUI_DIR = REPO_ROOT / "webUI"
 GENERATED_DYNAMODB_PATH = AGENTS_DIR / "shared_utils" / "generated" / "dynamodb.py"
 GENERATED_WEB_AGENTS_PATH = WEBUI_DIR / "src" / "lib" / "generated" / "agents.ts"
 GENERATED_WEB_MOCKS_PATH = WEBUI_DIR / "src" / "lib" / "generated" / "mockAgents.ts"
-TABLE_KEY_BASELINE_PATH = REPO_ROOT / ".infiloop" / "table-key-baseline.json"
+TABLE_KEY_BASELINE_PATH = REPO_ROOT / ".infiapp" / "table-key-baseline.json"
 
 
 def load_json(path: Path) -> dict[str, Any]:

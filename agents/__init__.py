@@ -1,2 +1,1 @@
-"""Infiloop Lambda agents."""
-
+"""Infiapp Lambda agents."""
