@@ -1,10 +1,9 @@
 # Agent Development Notes
 
-This repo uses README.md as the source of truth for framework concepts, setup, tests, and deployment.
+Read `README.md` to learn the framework purpose, concepts, setup, tests, and deployment flow. Read the README inside each framework folder, including `agents/`, `webUI/`, `repo_tools/`, and `dynamodb/`, to understand the conventions for developing those concepts.
 
 Conventions for coding agents:
 
-- Read `README.md` before changing framework structure.
 - Never push directly to `main`; create a branch and open a pull request for every change.
 - Keep Lambda agents under `agents/<agent_name>/`.
 - Keep shared Python code in `agents/shared_utils/`.

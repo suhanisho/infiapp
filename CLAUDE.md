@@ -1,6 +1,6 @@
 # Claude Development Notes
 
-Use `README.md` as the complete framework guide. This file only points coding assistants at the repo conventions.
+Read `README.md` to learn the framework purpose, concepts, setup, tests, and deployment flow. Read the README inside each framework folder, including `agents/`, `webUI/`, `repo_tools/`, and `dynamodb/`, to understand the conventions for developing those concepts.
 
 Hard rule: never push directly to `main`. Work on a branch and open a pull request for every change.
 
