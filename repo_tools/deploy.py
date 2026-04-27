@@ -25,9 +25,15 @@ AWS_ATTRIBUTE_TYPES = {
 }
 
 
-def run(command: list[str], *, cwd: Path = REPO_ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str],
+    *,
+    cwd: Path = REPO_ROOT,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(command))
-    return subprocess.run(command, cwd=cwd, text=True, check=check)
+    return subprocess.run(command, cwd=cwd, text=True, check=check, env=env)
 
 
 def aws_json(command: list[str]) -> tuple[int, dict[str, Any]]:
@@ -242,8 +248,19 @@ def deploy_agents() -> None:
 def deploy_webui() -> None:
     if not shutil.which("npx"):
         raise RuntimeError("npx is required to deploy the WebUI to Vercel")
+    vercel_token = os.environ.get("VERCEL_TOKEN")
+    vercel_team_id = os.environ.get("VERCEL_TEAM_ID")
+    if not vercel_token:
+        raise RuntimeError("VERCEL_TOKEN must be set for WebUI deployment")
+    if not vercel_team_id:
+        raise RuntimeError("VERCEL_TEAM_ID must be set for WebUI deployment")
+    vercel_env = {
+        **os.environ,
+        "VERCEL_TOKEN": vercel_token,
+        "VERCEL_TEAM_ID": vercel_team_id,
+    }
     run(["npm", "ci"], cwd=WEBUI_DIR)
-    run(["npx", "vercel", "deploy", "--prod", "--yes"], cwd=WEBUI_DIR)
+    run(["npx", "vercel", "deploy", "--prod", "--yes"], cwd=WEBUI_DIR, env=vercel_env)
 
 
 def main() -> int:

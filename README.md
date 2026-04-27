@@ -212,8 +212,7 @@ Required GitHub secrets:
 - `AWS_SECRET_ACCESS_KEY`
 - `AWS_ACCOUNT_ID`
 - `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
+- `VERCEL_TEAM_ID`
 
 The AWS credentials must be allowed to manage:
 
