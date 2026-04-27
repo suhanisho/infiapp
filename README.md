@@ -127,16 +127,6 @@ Open `http://localhost:3000` in a browser.
 
 ## Deployment
 
-Deployment is intentionally centralized in `.github/workflows/deploy.yml`, is manually triggered, and only runs from `main`.
-
-Required GitHub secrets:
-
-- `AWS_REGION`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `VERCEL_TOKEN`
-- `VERCEL_TEAM_ID`
-
 Create the AWS secrets:
 
 1. Use a dedicated AWS account for this app if possible.
@@ -163,12 +153,9 @@ Add all secrets in GitHub under **Repository > Settings > Secrets and variables 
 
 After setup, deploy from GitHub Actions:
 
-1. Merge the desired changes to `main`.
-2. Open **Actions > deploy** in GitHub.
-3. Select **Run workflow** on the `main` branch.
-4. Wait for the workflow to finish.
-
-Do not deploy from a local machine.
+1. Open **Actions > deploy** in GitHub.
+2. Select **Run workflow** on the `main` branch.
+3. Wait for the workflow to finish.
 
 ## Deployed State Verification
 
