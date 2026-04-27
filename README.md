@@ -87,7 +87,6 @@ Create a Python virtual environment:
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 ```
 
 Install Python dependencies:
