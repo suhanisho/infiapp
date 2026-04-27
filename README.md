@@ -32,7 +32,9 @@ webUI/
   app/                       Next.js App Router application
   src/lib/generated/         Generated external agent clients and mocks
 .github/workflows/
-  ci.yml                     Validation, tests, codegen, build, curl, screenshot checks
+  test-agents.yml            Agent spec validation, agent tests, Python compile checks
+  test-db.yml                DynamoDB spec validation and generated-code checks
+  test-webUI.yml             WebUI package tests, build, curl, screenshot checks
   deploy.yml                 Main-only deploy workflow
   verify-deployed-state.yml  Main-only deployed-state verification
 ```
@@ -214,15 +216,11 @@ python3 -m unittest discover -s agents -p 'test_*.py'
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pull requests and pushes:
+The test workflows run on pull requests and pushes to `main`:
 
-- Validate DynamoDB table specs.
-- Validate agent specs.
-- Run all agent tests.
-- Run code generation and fail if generated files change.
-- Install and test `webUI`.
-- Build `webUI`.
-- Start `webUI`, run a curl smoke test, and run Playwright screenshot tests.
+- `.github/workflows/test-agents.yml` validates agent specs, runs all agent tests, and compiles Python tooling.
+- `.github/workflows/test-db.yml` validates DynamoDB table specs and fails if generated files are stale.
+- `.github/workflows/test-webUI.yml` installs and tests `webUI`, builds it, starts it, runs a curl smoke test, and runs Playwright screenshot tests.
 
 ## Operations
 

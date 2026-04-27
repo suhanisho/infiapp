@@ -1,0 +1,36 @@
+name: test-agents
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate and test agents
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate agent specs
+        run: python3 repo_tools/validate_agents.py
+
+      - name: Run agent tests
+        run: npm run test:agents
+
+      - name: Compile agent and repo tool Python
+        run: python3 -m compileall repo_tools agents
+

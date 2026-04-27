@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Infiloop
+    name: Deploy Infiapp
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:

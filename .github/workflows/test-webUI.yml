@@ -1,4 +1,4 @@
-name: ci
+name: test-webUI
 
 on:
   pull_request:
@@ -10,20 +10,14 @@ permissions:
   contents: read
 
 jobs:
-  validate-and-test:
-    name: Validate specs, generated code, agents, and WebUI
+  test:
+    name: Test WebUI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -34,15 +28,6 @@ jobs:
 
       - name: Install WebUI dependencies
         run: npm --prefix webUI ci
-
-      - name: Validate specs
-        run: npm run validate
-
-      - name: Check generated files
-        run: npm run codegen:check
-
-      - name: Run agent tests
-        run: npm run test:agents
 
       - name: Run WebUI package tests
         run: npm --prefix webUI test
@@ -56,48 +41,33 @@ jobs:
       - name: Start WebUI
         shell: bash
         run: |
-          npm --prefix webUI run dev > /tmp/infiloop-webui.log 2>&1 &
-          echo "$!" > /tmp/infiloop-webui.pid
+          npm --prefix webUI run dev > /tmp/infiapp-webui.log 2>&1 &
+          echo "$!" > /tmp/infiapp-webui.pid
 
       - name: Curl smoke test
         shell: bash
         run: |
           for i in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:3000/api/hello \
+            if curl --fail --silent http://127.0.0.1:3000/api/sample \
               -X POST \
-              -H 'content-type: application/json' | grep -q 'lambda was called'; then
+              -H 'content-type: application/json' \
+              --data '{"message":"ci smoke"}' | grep -q 'ci smoke'; then
               exit 0
             fi
             sleep 1
           done
-          cat /tmp/infiloop-webui.log
+          cat /tmp/infiapp-webui.log
           exit 1
 
       - name: Stop WebUI smoke server
         if: always()
         shell: bash
         run: |
-          if [ -f /tmp/infiloop-webui.pid ]; then
-            kill "$(cat /tmp/infiloop-webui.pid)" || true
+          if [ -f /tmp/infiapp-webui.pid ]; then
+            kill "$(cat /tmp/infiapp-webui.pid)" || true
           fi
           fuser -k 3000/tcp || true
 
       - name: Screenshot tests
         run: npm --prefix webUI run test:e2e
 
-  repo-tools:
-    name: Repo tools import check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Compile repo tools
-        run: python3 -m compileall repo_tools agents
