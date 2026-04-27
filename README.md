@@ -82,12 +82,6 @@ Required local tools:
   brew install node@22
   ```
 
-- npm 10 is needed. `node@22` installs npm; if needed, pin npm with:
-
-  ```bash
-  npm install -g npm@10
-  ```
-
 Create a Python virtual environment:
 
 ```bash
