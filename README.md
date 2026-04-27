@@ -109,17 +109,13 @@ Generate framework helpers:
 python -m repo_tools codegen
 ```
 
-Run the WebUI:
+Run the WebUI against generated agent mocks:
 
 ```bash
-npm --prefix webUI run dev
+INFIAPP_AGENT_BACKEND_MODE=mock npm --prefix webUI run dev
 ```
 
-Run the starter agent test:
-
-```bash
-python -m repo_tools test-agents
-```
+Open `http://localhost:3000` in a browser. The starter page should show `Hi from infiapp`; store a message and list messages to exercise the WebUI flow against the mock backend without deploying AWS resources.
 
 ## CI
 
