@@ -62,51 +62,9 @@ See [webUI/README.md](webUI/README.md) for WebUI conventions, generated helper u
 
 ## Repo Tools
 
-Run repo tools from an activated Python virtual environment.
+`repo_tools/` contains the Python command runner, validators, code generators, deploy tooling, and deployed-state verification. Run it from an activated Python virtual environment.
 
-Run all repo checks:
-
-```bash
-source .venv/bin/activate
-python -m repo_tools check
-```
-
-Generate code:
-
-```bash
-python -m repo_tools codegen
-```
-
-Validate generated files are current:
-
-```bash
-python -m repo_tools codegen-check
-```
-
-Validate specs:
-
-```bash
-python -m repo_tools validate
-```
-
-Install Python dependencies:
-
-```bash
-python -m repo_tools install-python
-```
-
-Run all tests:
-
-```bash
-python -m repo_tools test-agents
-python -m repo_tools test-web
-```
-
-The generated files are:
-
-- `agents/shared_utils/generated/dynamodb.py`
-- `webUI/src/lib/generated/agents.ts`
-- `webUI/src/lib/generated/mockAgents.ts`
+See [repo_tools/README.md](repo_tools/README.md) for the command reference and generated file list.
 
 ## Local Setup
 
