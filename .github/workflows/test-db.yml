@@ -26,8 +26,7 @@ jobs:
           python-version: "3.11"
 
       - name: Validate DynamoDB specs
-        run: python3 repo_tools/validate_dynamodb.py
+        run: python -m repo_tools validate-db
 
       - name: Check generated files
-        run: npm run codegen:check
-
+        run: python -m repo_tools codegen-check

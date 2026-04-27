@@ -27,4 +27,4 @@ jobs:
           python-version: "3.11"
 
       - name: Validate deployed state
-        run: python3 repo_tools/check_deployed_state.py
+        run: python -m repo_tools.check_deployed_state

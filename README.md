@@ -105,34 +105,38 @@ Required WebUI secrets and environment variables:
 
 ## Repo Tools
 
+Run repo tools from an activated Python virtual environment.
+
 Run all repo checks:
 
 ```bash
-npm run check
+source .venv/bin/activate
+python -m repo_tools check
 ```
 
 Generate code:
 
 ```bash
-npm run codegen
+python -m repo_tools codegen
 ```
 
 Validate generated files are current:
 
 ```bash
-npm run codegen:check
+python -m repo_tools codegen-check
 ```
 
 Validate specs:
 
 ```bash
-npm run validate
+python -m repo_tools validate
 ```
 
 Run all tests:
 
 ```bash
-npm test
+python -m repo_tools test-agents
+python -m repo_tools test-web
 ```
 
 The generated files are:
@@ -170,7 +174,7 @@ npm --prefix webUI install
 Generate framework helpers:
 
 ```bash
-npm run codegen
+python -m repo_tools codegen
 ```
 
 Run the WebUI:
@@ -182,7 +186,7 @@ npm --prefix webUI run dev
 Run the starter agent test:
 
 ```bash
-python3 -m unittest discover -s agents -p 'test_*.py'
+python -m repo_tools test-agents
 ```
 
 ## CI
@@ -225,7 +229,7 @@ The deploy workflow creates one IAM role per agent and grants that role full acc
 Deploy manually from GitHub Actions after changes land on `main`. The deploy workflow runs:
 
 ```bash
-python3 repo_tools/deploy.py
+python -m repo_tools.deploy
 ```
 
 The deploy tool is deliberately small and auditable. It creates or updates DynamoDB tables, packages Lambda agents, and deploys the WebUI with Vercel.
@@ -240,7 +244,7 @@ Required runtime environment variables:
 `.github/workflows/verify-deployed-state.yml` is manually triggered and only runs from `main`. It compares the current deployed infrastructure against repo definitions:
 
 ```bash
-python3 repo_tools/check_deployed_state.py
+python -m repo_tools.check_deployed_state
 ```
 
 It verifies:
@@ -257,7 +261,7 @@ When adding an agent:
 - Add `agents/<agent_name>/code/handler.py`.
 - Add focused unit tests in `agents/<agent_name>/test/`.
 - Add DynamoDB table specs under `dynamodb/<agent_name>/` when the agent owns data.
-- Run `npm run codegen` after adding external agents or DynamoDB specs.
+- Run `python -m repo_tools codegen` after adding external agents or DynamoDB specs.
 
 When changing DynamoDB:
 
@@ -274,5 +278,6 @@ When changing WebUI:
 Before opening a PR:
 
 ```bash
-npm run check
+source .venv/bin/activate
+python -m repo_tools check
 ```

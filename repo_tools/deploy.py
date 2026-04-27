@@ -271,9 +271,8 @@ def deploy_webui() -> None:
 
 
 def main() -> int:
-    run(["python3", "repo_tools/validate_agents.py"])
-    run(["python3", "repo_tools/validate_dynamodb.py"])
-    run(["python3", "repo_tools/codegen.py", "--check"])
+    run([sys.executable, "-m", "repo_tools", "validate"])
+    run([sys.executable, "-m", "repo_tools", "codegen-check"])
     deploy_tables()
     deploy_agents()
     deploy_webui()

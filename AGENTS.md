@@ -8,7 +8,7 @@ Conventions for coding agents:
 - Keep Lambda agents under `agents/<agent_name>/`.
 - Keep shared Python code in `agents/shared_utils/`.
 - Keep DynamoDB table definitions under `dynamodb/<agent_name>/`; ownership is inferred from the folder name.
-- Do not manually edit files under generated folders; run `npm run codegen`.
+- Do not manually edit files under generated folders; run `python -m repo_tools codegen`.
 - Add or update agent tests for Lambda behavior.
 - Add or update WebUI tests for visible UI or generated-client behavior.
-- Run `npm run check` before considering the work complete.
+- Run `python -m repo_tools check` before considering the work complete.

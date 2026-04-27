@@ -26,11 +26,10 @@ jobs:
           python-version: "3.11"
 
       - name: Validate agent specs
-        run: python3 repo_tools/validate_agents.py
+        run: python -m repo_tools validate-agents
 
       - name: Run agent tests
-        run: npm run test:agents
+        run: python -m repo_tools test-agents
 
       - name: Compile agent and repo tool Python
-        run: python3 -m compileall repo_tools agents
-
+        run: python -m repo_tools compile-python

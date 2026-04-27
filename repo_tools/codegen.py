@@ -66,7 +66,7 @@ def render_python_value(value: Any, indent: int = 0) -> str:
 
 def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
     lines = [
-        '"""Generated DynamoDB helpers. Run `npm run codegen` to refresh."""',
+        '"""Generated DynamoDB helpers. Run `python -m repo_tools codegen` to refresh."""',
         "",
         "from __future__ import annotations",
         "",

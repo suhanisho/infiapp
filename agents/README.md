@@ -52,7 +52,7 @@ Shared Python utilities belong in `agents/shared_utils/`. Agent tests and deploy
 Generated shared utilities live under `agents/shared_utils/generated/`. Do not edit generated files by hand; update specs or `repo_tools/codegen.py`, then run:
 
 ```bash
-npm run codegen
+python -m repo_tools codegen
 ```
 
 ## Tests
@@ -62,8 +62,8 @@ Put agent tests under `test/` with names matching `test_*.py`.
 Run all agent checks:
 
 ```bash
-python3 repo_tools/validate_agents.py
-python3 -m unittest discover -s agents -p 'test_*.py'
+python -m repo_tools validate-agents
+python -m repo_tools test-agents
 ```
 
 The GitHub workflow `.github/workflows/test-agents.yml` runs these checks on pull requests and pushes to `main`.

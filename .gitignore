@@ -5,10 +5,10 @@ dist/
 coverage/
 .env
 .env.local
+.venv/
 .vercel/
 .pytest_cache/
 __pycache__/
 *.pyc
 playwright-report/
 test-results/
-
