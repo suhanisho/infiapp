@@ -24,21 +24,13 @@ Run package tests for generated-client behavior and other non-visual logic:
 npm --prefix webUI test
 ```
 
-Build the Next.js app before curl smoke tests and Playwright screenshot tests:
+Build the Next.js app before Playwright E2E and screenshot tests:
 
 ```bash
 npm --prefix webUI run build
 ```
 
-Run curl smoke tests for important API endpoints:
-
-```bash
-npm --prefix webUI run test:curl
-```
-
-Curl smoke coverage lives in `webUI/tests/test-endpoints.sh`. Keep endpoint assertions there instead of embedding curl logic in GitHub workflow YAML.
-
-Run Playwright screenshot tests for visible workflows, including phone-sized viewports. Playwright runs the built app through `next start`, so run the build first:
+Run Playwright E2E tests for visible workflows and screenshot validation. Playwright runs the built app through `next start`, so run the build first:
 
 ```bash
 npm --prefix webUI run test:e2e
@@ -54,4 +46,4 @@ npm --prefix webUI run test:e2e:update
 
 Review the generated image diff before committing updated baselines.
 
-The GitHub workflow `.github/workflows/test-webUI.yml` runs package tests, builds the app, runs the curl smoke script, and then runs screenshot tests.
+The GitHub workflow `.github/workflows/test-webUI.yml` runs package tests, builds the app, and then runs Playwright E2E plus screenshot tests.

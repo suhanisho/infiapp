@@ -43,8 +43,5 @@ jobs:
       - name: Install Playwright browser
         run: npm --prefix webUI exec playwright install --with-deps chromium
 
-      - name: Curl smoke tests
-        run: npm --prefix webUI run test:curl
-
-      - name: Screenshot tests
+      - name: Playwright E2E and screenshot tests
         run: python -m repo_tools test-web-e2e
