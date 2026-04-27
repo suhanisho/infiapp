@@ -66,6 +66,33 @@ See [webUI/README.md](webUI/README.md) for WebUI conventions, generated helper u
 
 See [repo_tools/README.md](repo_tools/README.md) for the command reference and generated file list.
 
+## Getting Started
+
+Fork this repo into your own GitHub account or organization, then clone your fork.
+
+Rename the starter app before building on it:
+
+```bash
+APP_NAME="my-app-name" APP_TITLE="My App Name" python3 - <<'PY'
+from pathlib import Path
+import subprocess
+import os
+
+app_name = os.environ["APP_NAME"]
+app_title = os.environ["APP_TITLE"]
+
+for rel_path in subprocess.check_output(["git", "ls-files"], text=True).splitlines():
+    path = Path(rel_path)
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError:
+        continue
+    updated = text.replace("Infiapp", app_title).replace("infiapp", app_name)
+    if updated != text:
+        path.write_text(updated)
+PY
+```
+
 ## Local Setup
 
 Required local tools:
