@@ -1,0 +1,70 @@
+# Agents
+
+Each folder in `agents/` except `shared_utils/` is one AWS Lambda agent.
+
+An agent must contain:
+
+```text
+agents/<agent_name>/
+  code/
+    handler.py
+  test/
+    test_*.py
+  spec.json
+```
+
+## Spec
+
+`spec.json` is the deployment contract for the agent:
+
+```json
+{
+  "name": "sample_agent",
+  "description": "Stores and echoes sample messages for the starter app.",
+  "connectivity": "external",
+  "handler": "handler.lambda_handler"
+}
+```
+
+Fields:
+
+- `name`: must match the agent folder name.
+- `description`: non-empty human-readable purpose.
+- `connectivity`: `internal` or `external`.
+- `handler`: Python module and function under `code/`, using `module.function` format.
+
+Framework defaults:
+
+- Runtime is always Python 3.11.
+- Lambda type is always code.
+- Agents are manually triggered by default.
+- Agent specs do not declare IAM policy JSON.
+- Agent specs do not declare environment variables or event triggers yet.
+- Each agent automatically receives full access to DynamoDB tables whose `owner_agent` matches the agent name.
+- External agents get generated WebUI clients and are intended to be callable through Lambda Function URLs.
+
+## Code
+
+Put Lambda implementation files under `code/`. The handler named in `spec.json` must exist there.
+
+Shared Python utilities belong in `agents/shared_utils/`. Agent tests and deployment packaging make this folder importable for every agent.
+
+Generated shared utilities live under `agents/shared_utils/generated/`. Do not edit generated files by hand; update specs or `repo_tools/codegen.py`, then run:
+
+```bash
+npm run codegen
+```
+
+## Tests
+
+Put agent tests under `test/` with names matching `test_*.py`.
+
+Run all agent checks:
+
+```bash
+python3 repo_tools/validate_agents.py
+python3 -m unittest discover -s agents -p 'test_*.py'
+```
+
+The GitHub workflow `.github/workflows/test-agents.yml` runs these checks on pull requests and pushes to `main`.
+

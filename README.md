@@ -13,6 +13,7 @@ The framework keeps four concepts small and explicit:
 
 ```text
 agents/
+  README.md                  Agent folder contract and spec reference
   shared_utils/              Shared Python utilities copied onto every Lambda path
   sample_agent/
     code/                    Lambda handler and implementation
