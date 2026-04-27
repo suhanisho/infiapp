@@ -1,0 +1,46 @@
+{
+  "description": "Starter external Lambda agent for the Infiapp demo app.",
+  "connectivity": "external",
+  "memory_mb": 128,
+  "timeout_seconds": 30,
+  "ephemeral_storage_mb": 512,
+  "api_context": [
+    {
+      "call": "store_message",
+      "description": "Stores one user message and returns the stored item.",
+      "input": {
+        "message": "String"
+      },
+      "output": {
+        "message": "String",
+        "item": {
+          "messageId": "String",
+          "createdAt": "String",
+          "message": "String"
+        },
+        "stored": "Boolean"
+      }
+    },
+    {
+      "call": "list_messages",
+      "description": "Lists stored messages in descending creation order with pagination.",
+      "input": {
+        "limit?": "Number",
+        "nextMessageId?": "String | Null"
+      },
+      "output": {
+        "messages": [
+          {
+            "messageId": "String",
+            "createdAt": "String",
+            "message": "String"
+          }
+        ],
+        "nextMessageId": "String | Null"
+      }
+    }
+  ],
+  "required_dependencies": [
+    "boto3"
+  ]
+}

@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+.env
+.env.local
+.venv/
+*.egg-info/
+.vercel/
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+playwright-report/
+test-results/

@@ -1,0 +1,31 @@
+{
+  "include": [
+    "agents/*/code",
+    "agents/*/test",
+    "repo_tools"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/.*",
+    ".venv"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "executionEnvironments": [
+    {
+      "root": "agents",
+      "extraPaths": [
+        "agents/shared_utils"
+      ]
+    },
+    {
+      "root": "repo_tools",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ]
+}

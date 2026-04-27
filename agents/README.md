@@ -1,0 +1,118 @@
+# Agents
+
+Each folder in `agents/` except `shared_utils/` is one AWS Lambda agent.
+
+An agent must contain:
+
+```text
+agents/<agent_name>/
+  code/
+    handler.py
+  test/
+    test_*.py
+  spec.json
+```
+
+## Spec
+
+`spec.json` is the deployment contract for the agent:
+
+```json
+{
+  "description": "Stores and echoes sample messages for the starter app.",
+  "connectivity": "external",
+  "memory_mb": 128,
+  "timeout_seconds": 30,
+  "ephemeral_storage_mb": 512,
+  "api_context": [
+    {
+      "call": "store_message",
+      "description": "Stores one user message.",
+      "input": {
+        "message": "String"
+      },
+      "output": {
+        "message": "String",
+        "stored": "Boolean"
+      }
+    }
+  ],
+  "required_dependencies": [
+    "boto3"
+  ]
+}
+```
+
+Fields:
+
+- `description`: non-empty human-readable purpose.
+- `connectivity`: `internal` or `external`.
+- `memory_mb`: Lambda memory size in MB, from 128 through 10240.
+- `timeout_seconds`: Lambda timeout in seconds, from 1 through 900.
+- `ephemeral_storage_mb`: Lambda `/tmp` storage in MB, from 512 through 10240.
+- `api_context`: non-empty list of supported calls. Each call declares `call`, `description`, `input`, and `output`.
+- `required_dependencies`: package names used by the agent. Each name must resolve to an exact pinned requirement in root `pyproject.toml`.
+
+## API Interface
+
+`api_context` is the external contract for an agent. `call` is the action name passed to the Lambda. Do not include `action` in output schemas; the call already names the operation.
+
+`input` and `output` use the repo's compact schema format:
+
+- Required object fields are plain keys, such as `"message": "String"`.
+- Optional object fields end in `?`, such as `"limit?": "Number"`.
+- Scalar types are `String`, `Number`, `Boolean`, `Binary`, `Map`, `List`, `Any`, and `Null`.
+- Unions use `|`, such as `"Map | Null"`.
+- Fixed scalar values use `Literal[value]`.
+- Nested objects are nested JSON objects.
+- Arrays are single-item lists, such as `[{"message": "String"}]`.
+
+Repo codegen uses `api_context` to generate typed WebUI agent clients and local mocks. Add or update API tests when changing it.
+
+Framework defaults:
+
+- Runtime is always Python 3.11.
+- Agent name and Lambda function name are inferred from the `agents/<agent_name>/` folder.
+- Handler is always `agents/<agent_name>/code/handler.py` with a `lambda_handler` function.
+- Each agent automatically receives full access to DynamoDB tables declared under `dynamodb/<agent_name>/`.
+- External agents get generated WebUI clients and are invoked by the deployed WebUI through Vercel OIDC IAM access.
+
+## Code
+
+Put Lambda implementation files under `code/`. The framework deploys `handler.lambda_handler`, so every agent must define `lambda_handler` in `code/handler.py`.
+
+Shared Python utilities belong in `agents/shared_utils/`. Agent tests and deployment packaging make this folder importable for every agent.
+
+Generated shared utilities live under `agents/shared_utils/generated/`. DynamoDB table specs generate a typed item object for every table plus helpers to put an item, query one item by key, and query a sort-key range. Agent code should use those helpers instead of hand-building table clients. Do not edit generated files by hand; update specs or `repo_tools/codegen.py`, then run:
+
+```bash
+python -m repo_tools codegen
+```
+
+## Dependencies
+
+Declare Python package needs in `required_dependencies` as package names only, such as `boto3`. Add the exact pinned version once in root `pyproject.toml` under `project.dependencies`.
+
+Install Python dependencies from an activated venv with:
+
+```bash
+python -m pip install ".[dev]"
+```
+
+Deployment packages only the pinned dependencies named by each agent.
+
+## Tests
+
+Put agent tests under `agents/<agent_name>/test/` with names matching `test_*.py`. Put shared utility tests under `agents/shared_utils/test/`; the same test command and CI workflow run them.
+
+Agent unit tests must mock every external dependency. Do not call live AWS services, DynamoDB tables, Lambda functions, HTTP APIs, Vercel, databases, queues, or other networked systems from unit tests. Use fakes, stubs, dependency injection, or `unittest.mock` so tests only verify the agent's code and generated helper contracts.
+
+Run all agent checks:
+
+```bash
+python -m repo_tools validate-agents
+python -m repo_tools test-agents
+python -m repo_tools typecheck-agents
+```
+
+The GitHub workflow `.github/workflows/test-agents.yml` runs these checks on pull requests and pushes to `main`.

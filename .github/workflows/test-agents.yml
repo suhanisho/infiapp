@@ -1,0 +1,58 @@
+name: test-agents
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate and test agents
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          echo "::endgroup::"
+
+      - name: Install Python dependencies
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
+
+      - name: Validate agent specs
+        run: |
+          echo "::group::Validate agent specs"
+          python -m repo_tools validate-agents
+          echo "::endgroup::"
+
+      - name: Run agent and shared utility tests
+        run: |
+          echo "::group::Run agent and shared utility tests"
+          python -m repo_tools test-agents
+          echo "::endgroup::"
+
+      - name: Type check agents and shared utilities
+        run: |
+          echo "::group::Type check agents and shared utilities"
+          python -m repo_tools typecheck-agents
+          echo "::endgroup::"

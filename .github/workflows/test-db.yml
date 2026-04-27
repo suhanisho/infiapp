@@ -1,0 +1,52 @@
+name: test-db
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate DynamoDB specs and generated bindings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          echo "::endgroup::"
+
+      - name: Install Python dependencies
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
+
+      - name: Validate DynamoDB specs
+        run: |
+          echo "::group::Validate DynamoDB specs"
+          python -m repo_tools validate-db
+          echo "::endgroup::"
+
+      - name: Check generated files
+        run: |
+          echo "::group::Check generated files"
+          python -m repo_tools codegen-check
+          echo "::endgroup::"
