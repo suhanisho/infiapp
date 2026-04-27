@@ -1,12 +1,19 @@
-# Claude Development Notes
+# Agent Development Notes
 
 Read `README.md` to learn the framework purpose, concepts, setup, tests, and deployment flow. Read the README inside each framework folder, including `agents/`, `webUI/`, `repo_tools/`, and `dynamodb/`, to understand the conventions for developing those concepts.
 
-Hard rule: never push directly to `main`. Work on a branch and open a pull request for every change.
+Hard rules:
+
+- Never push directly to `main`; create a branch and open a pull request for every change.
+- Always activate the repo virtual environment before running Python commands, Python tests, repo tools, validators, codegen, or type checks:
+
+  ```bash
+  source .venv/bin/activate
+  ```
 
 Expected workflow:
 
-1. Install Python dependencies with `python -m pip install ".[dev]"` after venv activation.
+1. Install Python dependencies with `python -m pip install ".[dev]"` inside the activated venv.
 2. Validate changed specs with targeted commands such as `python -m repo_tools validate-agents` or `python -m repo_tools validate-db`.
 3. Regenerate framework code with `python -m repo_tools codegen`.
 4. Run agent tests with `python -m repo_tools test-agents`.
