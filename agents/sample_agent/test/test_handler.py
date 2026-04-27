@@ -30,7 +30,6 @@ lambda_handler = cast(
     Callable[..., dict[str, Any]],
     getattr(handler_module, "lambda_handler"),
 )
-local_call = cast(Callable[[str], dict[str, Any]], getattr(handler_module, "local_call"))
 
 
 class SampleAgentTest(unittest.TestCase):
@@ -58,9 +57,6 @@ class SampleAgentTest(unittest.TestCase):
         self.assertEqual(response["statusCode"], 400)
         body = json.loads(response["body"])
         self.assertEqual(body["error"], "message is required")
-
-    def test_local_call_uses_handler(self) -> None:
-        self.assertEqual(local_call("local echo")["lastMessage"], "local echo")
 
 
 if __name__ == "__main__":

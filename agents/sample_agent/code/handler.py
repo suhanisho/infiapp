@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 from generated.dynamodb import SAMPLE_MESSAGES_TABLE, put_sample_messages, query_sample_messages_by_message_id_range
 from response import json_response
@@ -78,9 +78,3 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
         "table": SAMPLE_MESSAGES_TABLE["table_name"],
     }
     return json_response(200, body)
-
-
-def local_call(message: str = "sample message from local") -> dict[str, Any]:
-    """Convenience function used by local tooling and tests."""
-    response = lambda_handler({"source": "local", "message": message})
-    return cast(dict[str, Any], json.loads(response["body"]))
