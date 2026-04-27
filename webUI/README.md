@@ -44,4 +44,14 @@ Run Playwright screenshot tests for visible workflows, including phone-sized vie
 npm --prefix webUI run test:e2e
 ```
 
+Only iPhone screenshots are checked. Baselines are committed under `webUI/tests/app.spec.ts-snapshots/`.
+
+Regenerate iPhone screenshot baselines intentionally after an accepted UI change:
+
+```bash
+npm --prefix webUI run test:e2e:update
+```
+
+Review the generated image diff before committing updated baselines.
+
 The GitHub workflow `.github/workflows/test-webUI.yml` runs package tests, builds the app, runs the curl smoke script, and then runs screenshot tests.

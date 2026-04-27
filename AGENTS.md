@@ -30,4 +30,5 @@ When changing WebUI:
 
 - Add package tests for client logic.
 - Add or update Playwright coverage for visible workflows.
+- Keep the committed iPhone screenshot baseline current by running `npm --prefix webUI run test:e2e:update` after accepted visual changes.
 - Keep generated files generated; edit specs or generator code instead.
