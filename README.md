@@ -50,42 +50,9 @@ See [agents/README.md](agents/README.md) for the required folder structure, `spe
 
 ## DynamoDB
 
-DynamoDB definitions live under `dynamodb/`. Each agent owns one folder, and every JSON file inside that folder defines one table.
+DynamoDB tables are declared as JSON specs under `dynamodb/<agent_name>/`. Each table belongs to the agent named by its parent folder, and repo tools generate shared Python helpers from these specs.
 
-Example:
-
-```json
-{
-  "table_name": "sample_messages",
-  "primary_key": {
-    "partition_key": {
-      "name": "app_name",
-      "type": "String"
-    },
-    "sort_key": {
-      "name": "message_id",
-      "type": "String"
-    }
-  },
-  "attributes": {
-    "app_name": "String",
-    "message_id": "String",
-    "created_at": "String",
-    "message": "String"
-  }
-}
-```
-
-Compatibility rules:
-
-- The table file path owns the table identity.
-- The owning agent is inferred from the parent folder.
-- Billing mode is hardcoded to `PAY_PER_REQUEST`.
-- Partition key and sort key names and types are backwards compatible and must not change after deployment.
-- Non-key attributes may be added, changed, or removed.
-- Supported attribute types are documented in `dynamodb/README.md`.
-- On pull requests, the validator checks key compatibility against `main`.
-- On `main`, the validator checks key compatibility against the previous commit.
+See [dynamodb/README.md](dynamodb/README.md) for the table spec format, supported attribute types, defaults, and key compatibility rules.
 
 ## WebUI
 
