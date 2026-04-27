@@ -697,7 +697,8 @@ def deploy_webui() -> None:
 
 
 def main() -> int:
-    run([sys.executable, "-m", "repo_tools", "validate"])
+    run([sys.executable, "-m", "repo_tools", "validate-agents"])
+    run([sys.executable, "-m", "repo_tools", "validate-db"])
     run([sys.executable, "-m", "repo_tools", "codegen-check"])
     deploy_tables()
     deploy_agents()

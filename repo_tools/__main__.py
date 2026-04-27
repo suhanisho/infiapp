@@ -24,11 +24,6 @@ def npm_webui_command(*args: str) -> list[str]:
     return ["npm", "--prefix", "webUI", *args]
 
 
-def validate() -> None:
-    validate_agents()
-    validate_db()
-
-
 def validate_agents() -> None:
     run(python_command("-m", "repo_tools.validate_agents"))
 
@@ -107,7 +102,6 @@ def test_web_e2e() -> None:
 
 
 COMMANDS = {
-    "validate": validate,
     "validate-agents": validate_agents,
     "validate-db": validate_db,
     "codegen": codegen,

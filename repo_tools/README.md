@@ -14,10 +14,16 @@ Install Python dependencies from `pyproject.toml`, including the `dev` extra:
 python -m pip install ".[dev]"
 ```
 
-Validate specs:
+Validate agent specs:
 
 ```bash
-python -m repo_tools validate
+python -m repo_tools validate-agents
+```
+
+Validate DynamoDB specs:
+
+```bash
+python -m repo_tools validate-db
 ```
 
 Generate code:
