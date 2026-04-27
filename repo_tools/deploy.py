@@ -43,6 +43,13 @@ def aws_json(command: list[str]) -> tuple[int, dict[str, Any]]:
     return 0, json.loads(result.stdout or "{}")
 
 
+def get_aws_account_id() -> str:
+    code, data = aws_json(["aws", "sts", "get-caller-identity"])
+    if code != 0 or not isinstance(data.get("Account"), str):
+        raise RuntimeError("Unable to determine AWS account id from configured credentials")
+    return data["Account"]
+
+
 def deploy_tables() -> None:
     for path in iter_table_paths():
         table = load_json(path)
@@ -86,7 +93,7 @@ def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
 
 
 def ensure_agent_role(agent_name: str) -> str:
-    account_id = os.environ["AWS_ACCOUNT_ID"]
+    account_id = get_aws_account_id()
     role_name = f"infiapp-{agent_name}-lambda-role"
     role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", role_name])
     if role_code != 0:
