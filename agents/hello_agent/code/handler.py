@@ -3,26 +3,79 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from generated.dynamodb import INFILOOP_HELLO_CALLS_TABLE
+from generated.dynamodb import INFILOOP_USER_MESSAGES_TABLE
 from response import json_response
 
 
+def _payload_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
+    if not event:
+        return {}
+
+    body = event.get("body")
+    if isinstance(body, str) and body:
+        try:
+            parsed_body = json.loads(body)
+        except json.JSONDecodeError:
+            parsed_body = {}
+        if isinstance(parsed_body, dict):
+            return parsed_body
+
+    if isinstance(body, dict):
+        return body
+
+    return event
+
+
+def _store_message(message: str) -> bool:
+    if not os.environ.get("AWS_EXECUTION_ENV"):
+        return False
+
+    try:
+        import boto3  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    table_name = INFILOOP_USER_MESSAGES_TABLE["table_name"]
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(table_name)
+    table.put_item(
+        Item={
+            "app_name": "infiloop",
+            "message_id": f"{created_at}#{uuid.uuid4()}",
+            "created_at": created_at,
+            "message": message,
+        }
+    )
+    return True
+
+
 def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
-    """Return a stable response for the starter backend call."""
+    """Store a user message and echo the latest message back."""
     _ = context
+    payload = _payload_from_event(event)
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        return json_response(400, {"error": "message is required", "agent": "hello_agent"})
+
+    stored = _store_message(message)
     body = {
-        "message": "lambda was called",
+        "message": f"lambda was called: {message}",
+        "lastMessage": message,
         "agent": "hello_agent",
         "mocked": False,
-        "table": INFILOOP_HELLO_CALLS_TABLE["table_name"],
-        "received": event or {},
+        "stored": stored,
+        "table": INFILOOP_USER_MESSAGES_TABLE["table_name"],
     }
     return json_response(200, body)
 
 
-def local_call() -> dict[str, Any]:
+def local_call(message: str = "hello from local") -> dict[str, Any]:
     """Convenience function used by local tooling and tests."""
-    response = lambda_handler({"source": "local"})
+    response = lambda_handler({"source": "local", "message": message})
     return json.loads(response["body"])

@@ -6,7 +6,7 @@ test("generated web agent client exposes hello agent", async () => {
   const source = await readFile(new URL("../src/lib/generated/agents.ts", import.meta.url), "utf8");
 
   assert.match(source, /callHelloAgent/);
+  assert.match(source, /payload: AgentRequest/);
   assert.match(source, /HELLO_AGENT_URL/);
   assert.match(source, /mockCallHelloAgent/);
 });
-

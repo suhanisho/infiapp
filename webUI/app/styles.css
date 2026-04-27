@@ -59,11 +59,33 @@ h1 {
 }
 
 .backend-panel {
-  display: flex;
+  display: grid;
   min-width: min(100%, 420px);
-  flex-wrap: wrap;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
+}
+
+label {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+input {
+  min-height: 44px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  padding: 0 14px;
+}
+
+input:focus-visible {
+  border-color: var(--accent);
+  outline: 3px solid rgba(15, 123, 108, 0.18);
 }
 
 button {
@@ -89,6 +111,7 @@ button:focus-visible {
 }
 
 .result {
+  grid-column: 1 / -1;
   min-width: 180px;
   margin: 0;
   color: var(--muted);
@@ -110,8 +133,7 @@ button:focus-visible {
   }
 
   .backend-panel {
-    align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   button,
@@ -119,4 +141,3 @@ button:focus-visible {
     width: 100%;
   }
 }
-

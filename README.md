@@ -21,7 +21,8 @@ agents/
 dynamodb/
   README.md                  DynamoDB table spec
   hello_agent/
-    hello_calls.json         Table owned by hello_agent
+    hello_calls.json         Starter call table owned by hello_agent
+    user_messages.json       Demo user-message table owned by hello_agent
 repo_tools/
   codegen.py                 Generates DynamoDB helpers and WebUI agent clients
   validate_agents.py         Validates Lambda agent specs
@@ -119,10 +120,11 @@ Compatibility rules:
 `webUI/` is a single Next.js App Router application. It has one starter page:
 
 - Displays `Hi from infiloop`.
-- Shows a button that calls `/api/hello`.
+- Shows a message input and a button that calls `/api/hello`.
 - `/api/hello` uses the generated external agent client.
-- In local development the generated client uses the mock and returns `lambda was called`.
+- In local development the generated client uses the mock and echoes the submitted message.
 - In production it calls the configured Lambda Function URL.
+- `hello_agent` stores submitted messages in `infiloop_user_messages` and returns the latest submitted message as `lastMessage`.
 
 Required WebUI secrets and environment variables:
 
