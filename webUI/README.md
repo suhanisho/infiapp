@@ -24,7 +24,7 @@ Run package tests for generated-client behavior and other non-visual logic:
 npm --prefix webUI test
 ```
 
-Build the Next.js app before curl smoke tests:
+Build the Next.js app before curl smoke tests and Playwright screenshot tests:
 
 ```bash
 npm --prefix webUI run build
@@ -38,7 +38,7 @@ npm --prefix webUI run test:curl
 
 Curl smoke coverage lives in `webUI/tests/test-endpoints.sh`. Keep endpoint assertions there instead of embedding curl logic in GitHub workflow YAML.
 
-Run Playwright screenshot tests for visible workflows, including phone-sized viewports:
+Run Playwright screenshot tests for visible workflows, including phone-sized viewports. Playwright runs the built app through `next start`, so run the build first:
 
 ```bash
 npm --prefix webUI run test:e2e

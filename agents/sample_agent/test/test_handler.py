@@ -33,30 +33,46 @@ lambda_handler = cast(
 
 
 class SampleAgentTest(unittest.TestCase):
-    def test_lambda_handler_stores_and_echoes_message_shape(self) -> None:
-        response = lambda_handler({"button": "clicked", "message": "sample note"})
+    def test_lambda_handler_stores_message_shape(self) -> None:
+        response = lambda_handler({"action": "store_message", "message": "sample note"})
 
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
-        self.assertEqual(body["message"], "lambda was called: sample note")
-        self.assertEqual(body["lastMessage"], "sample note")
+        self.assertEqual(body["action"], "store_message")
+        self.assertEqual(body["message"], "message stored")
+        self.assertEqual(body["item"]["message"], "sample note")
         self.assertEqual(body["agent"], "sample_agent")
-        self.assertEqual(body["table"], "sample_messages")
         self.assertFalse(body["stored"])
 
     def test_lambda_handler_accepts_function_url_body(self) -> None:
-        response = lambda_handler({"body": json.dumps({"message": "from body"})})
+        response = lambda_handler({"body": json.dumps({"action": "store_message", "message": "from body"})})
 
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
-        self.assertEqual(body["lastMessage"], "from body")
+        self.assertEqual(body["item"]["message"], "from body")
+
+    def test_lambda_handler_lists_messages_shape(self) -> None:
+        response = lambda_handler({"action": "list_messages", "limit": 5})
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["action"], "list_messages")
+        self.assertEqual(body["messages"], [])
+        self.assertIsNone(body["nextKey"])
 
     def test_lambda_handler_requires_message(self) -> None:
-        response = lambda_handler({"button": "clicked"})
+        response = lambda_handler({"action": "store_message"})
 
         self.assertEqual(response["statusCode"], 400)
         body = json.loads(response["body"])
         self.assertEqual(body["error"], "message is required")
+
+    def test_lambda_handler_rejects_unknown_action(self) -> None:
+        response = lambda_handler({"action": "wat"})
+
+        self.assertEqual(response["statusCode"], 400)
+        body = json.loads(response["body"])
+        self.assertEqual(body["error"], "unsupported action: wat")
 
 
 if __name__ == "__main__":

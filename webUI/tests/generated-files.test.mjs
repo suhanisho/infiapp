@@ -10,4 +10,8 @@ test("generated web agent client exposes sample agent", async () => {
   assert.match(source, /INFIAPP_AGENT_BACKEND_MODE/);
   assert.match(source, /awsCredentialsProvider/);
   assert.match(source, /mockCallSampleAgent/);
+  const mockSource = await readFile(new URL("../src/lib/generated/mockAgents.ts", import.meta.url), "utf8");
+  assert.match(mockSource, /AgentMessage/);
+  assert.match(mockSource, /list_messages/);
+  assert.match(mockSource, /nextKey/);
 });

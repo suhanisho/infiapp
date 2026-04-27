@@ -16,6 +16,7 @@ from generated.dynamodb import (  # noqa: E402
     get_sample_messages,
     put_sample_messages,
     query_sample_messages_by_message_id_range,
+    query_sample_messages_by_message_id_range_page,
     query_sample_messages_item,
 )
 
@@ -39,7 +40,13 @@ class FakeTable:
 
     def query(self, **kwargs: Any) -> dict[str, Any]:
         self.last_query_args = kwargs
-        return {"Items": list(self.items.values())}
+        response: dict[str, Any] = {"Items": list(self.items.values())}
+        if kwargs.get("Limit") == 1:
+            response["LastEvaluatedKey"] = {
+                "app_name": "infiapp",
+                "message_id": "message-1",
+            }
+        return response
 
 
 class FakeDynamoDBResource:
@@ -97,6 +104,33 @@ class GeneratedDynamoDBHelpersTest(unittest.TestCase):
         self.assertFalse(table.last_query_args["ScanIndexForward"])
         self.assertTrue(table.last_query_args["ConsistentRead"])
         self.assertEqual(table.last_query_args["Limit"], 1)
+
+    def test_query_sample_messages_by_message_id_range_page_returns_next_key(self) -> None:
+        dynamodb = FakeDynamoDBResource()
+        put_sample_messages(
+            {
+                "app_name": "infiapp",
+                "message_id": "message-1",
+                "created_at": "2026-04-27T00:00:00+00:00",
+                "message": "latest",
+            },
+            dynamodb_resource=dynamodb,
+        )
+
+        page = query_sample_messages_by_message_id_range_page(
+            "infiapp",
+            exclusive_start_key={"app_name": "infiapp", "message_id": "message-0"},
+            dynamodb_resource=dynamodb,
+            limit=1,
+        )
+
+        table = dynamodb.Table("sample_messages")
+        self.assertEqual(page["items"][0]["message"], "latest")
+        self.assertEqual(page["next_key"], {"app_name": "infiapp", "message_id": "message-1"})
+        self.assertEqual(
+            table.last_query_args["ExclusiveStartKey"],
+            {"app_name": "infiapp", "message_id": "message-0"},
+        )
 
 
 if __name__ == "__main__":

@@ -43,6 +43,10 @@ def typed_dict_name(table_name: str) -> str:
     return f"{pascal_name(snake_identifier(table_name))}Item"
 
 
+def page_type_name(table_name: str) -> str:
+    return f"{pascal_name(snake_identifier(table_name))}Page"
+
+
 def python_type_name(attribute_type: str) -> str:
     return {
         "String": "str",
@@ -137,12 +141,20 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
 
     for table in sorted(tables, key=lambda item: item["table_name"]):
         item_type_name = typed_dict_name(table["table_name"])
+        table_page_type_name = page_type_name(table["table_name"])
         lines.append("")
         lines.append(f"class {item_type_name}(TypedDict):")
         lines.append(f'    """Typed representation of a row in the {table["table_name"]} table."""')
         lines.append("")
         for attribute_name, attribute_type in sorted(table["attributes"].items()):
             lines.append(f"    {snake_identifier(attribute_name)}: {python_type_name(attribute_type)}")
+        lines.append("")
+        lines.append("")
+        lines.append(f"class {table_page_type_name}(TypedDict):")
+        lines.append(f'    """Paginated query result for the {table["table_name"]} table."""')
+        lines.append("")
+        lines.append(f"    items: list[{item_type_name}]")
+        lines.append("    next_key: dict[str, Any] | None")
         lines.append("")
 
     for table in sorted(tables, key=lambda item: item["table_name"]):
@@ -166,6 +178,7 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
         table_identifier = snake_identifier(table_name)
         table_constant = constant_name(table_name)
         item_type_name = typed_dict_name(table_name)
+        table_page_type_name = page_type_name(table_name)
         partition_key = table["primary_key"]["partition_key"]["name"]
         partition_arg = snake_identifier(partition_key)
         sort_key = table["primary_key"].get("sort_key")
@@ -243,16 +256,17 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     "    )",
                     "",
                     "",
-                    f"def query_{table_identifier}_by_{sort_arg}_range(",
+                    f"def query_{table_identifier}_by_{sort_arg}_range_page(",
                     f"    {partition_arg}: Any,",
                     "    *,",
                     f"    start_{sort_arg}: Any | None = None,",
                     f"    end_{sort_arg}: Any | None = None,",
+                    "    exclusive_start_key: Mapping[str, Any] | None = None,",
                     "    dynamodb_resource: Any | None = None,",
                     "    scan_index_forward: bool = True,",
                     "    consistent_read: bool = False,",
                     "    limit: int | None = None,",
-                    f") -> list[{item_type_name}]:",
+                    f") -> {table_page_type_name}:",
                     "    from boto3.dynamodb.conditions import Key",
                     "",
                     f'    key_condition = Key("{partition_key}").eq({partition_arg})',
@@ -267,10 +281,37 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                     '        "ScanIndexForward": scan_index_forward,',
                     '        "ConsistentRead": consistent_read,',
                     "    }",
+                    "    if exclusive_start_key is not None:",
+                    '        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)',
                     "    if limit is not None:",
                     '        query_args["Limit"] = limit',
                     f"    response = _table({table_constant}, dynamodb_resource).query(**query_args)",
-                    f'    return [cast({item_type_name}, item) for item in response.get("Items", [])]',
+                    '    next_key = response.get("LastEvaluatedKey")',
+                    "    return {",
+                    f'        "items": [cast({item_type_name}, item) for item in response.get("Items", [])],',
+                    '        "next_key": dict(next_key) if isinstance(next_key, dict) else None,',
+                    "    }",
+                    "",
+                    "",
+                    f"def query_{table_identifier}_by_{sort_arg}_range(",
+                    f"    {partition_arg}: Any,",
+                    "    *,",
+                    f"    start_{sort_arg}: Any | None = None,",
+                    f"    end_{sort_arg}: Any | None = None,",
+                    "    dynamodb_resource: Any | None = None,",
+                    "    scan_index_forward: bool = True,",
+                    "    consistent_read: bool = False,",
+                    "    limit: int | None = None,",
+                    f") -> list[{item_type_name}]:",
+                    f"    return query_{table_identifier}_by_{sort_arg}_range_page(",
+                    f"        {partition_arg},",
+                    f"        start_{sort_arg}=start_{sort_arg},",
+                    f"        end_{sort_arg}=end_{sort_arg},",
+                    "        dynamodb_resource=dynamodb_resource,",
+                    "        scan_index_forward=scan_index_forward,",
+                    "        consistent_read=consistent_read,",
+                    "        limit=limit,",
+                    '    )["items"]',
                     "",
                     "",
                     f"def query_{table_identifier}(",
@@ -343,9 +384,19 @@ def render_mock_agents_ts(agents: list[dict[str, Any]]) -> str:
         "",
         "export type AgentRequest = Record<string, unknown>;",
         "",
-        "export type AgentResponse = {",
+        "export type AgentMessage = {",
+        "  messageId: string;",
+        "  createdAt: string;",
         "  message: string;",
+        "};",
+        "",
+        "export type AgentResponse = {",
+        "  action?: string;",
+        "  message?: string;",
         "  lastMessage?: string;",
+        "  item?: AgentMessage;",
+        "  messages?: AgentMessage[];",
+        "  nextKey?: Record<string, unknown> | null;",
         "  agent: string;",
         "  mocked: boolean;",
         "  stored?: boolean;",
@@ -354,16 +405,46 @@ def render_mock_agents_ts(agents: list[dict[str, Any]]) -> str:
     ]
     for agent in sorted(external_agents, key=lambda item: item["name"]):
         function_name = f"mockCall{pascal_name(agent['name'])}"
+        store_name = f"mock{pascal_name(agent['name'])}Messages"
         lines.extend(
             [
+                f"const {store_name}: AgentMessage[] = [];",
+                "",
                 f"export async function {function_name}(payload: AgentRequest = {{}}): Promise<AgentResponse> {{",
-                '  const lastMessage = typeof payload.message === "string" ? payload.message : "lambda was called";',
+                '  const action = typeof payload.action === "string" ? payload.action : "store_message";',
+                '  if (action === "list_messages") {',
+                '    const limit = typeof payload.limit === "number" ? Math.max(1, Math.min(payload.limit, 50)) : 10;',
+                '    const nextKey = payload.nextKey && typeof payload.nextKey === "object" ? (payload.nextKey as Record<string, unknown>) : undefined;',
+                '    const offset = typeof nextKey?.offset === "number" ? nextKey.offset : 0;',
+                f"    const messages = {store_name}.slice(offset, offset + limit);",
+                f"    const newOffset = offset + messages.length;",
+                "    return {",
+                '      action: "list_messages",',
+                "      messages,",
+                f"      nextKey: newOffset < {store_name}.length ? {{ offset: newOffset }} : null,",
+                f'      agent: "{agent["name"]}",',
+                "      mocked: true,",
+                "    };",
+                "  }",
+                "",
+                '  const message = typeof payload.message === "string" ? payload.message.trim() : "";',
+                "  if (!message) {",
+                '    throw new Error("message is required");',
+                "  }",
+                "  const createdAt = new Date().toISOString();",
+                "  const item = {",
+                '    messageId: `${createdAt}#mock`,',
+                "    createdAt,",
+                "    message,",
+                "  };",
+                f"  {store_name}.unshift(item);",
                 "  return {",
-                '    message: `lambda was called: ${lastMessage}`,',
-                "    lastMessage,",
+                '    action: "store_message",',
+                '    message: "message stored",',
+                "    item,",
                 f'    agent: "{agent["name"]}",',
                 "    mocked: true,",
-                "    stored: false,",
+                "    stored: true,",
                 "  };",
                 "}",
                 "",

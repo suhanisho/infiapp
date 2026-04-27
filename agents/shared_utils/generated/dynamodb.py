@@ -49,6 +49,13 @@ class SampleMessagesItem(TypedDict):
     message: str
     message_id: str
 
+
+class SampleMessagesPage(TypedDict):
+    """Paginated query result for the sample_messages table."""
+
+    items: list[SampleMessagesItem]
+    next_key: dict[str, Any] | None
+
 SAMPLE_MESSAGES_TABLE: dict[str, Any] = {
     "attributes": {
         "app_name": "String",
@@ -134,16 +141,17 @@ def delete_sample_messages(
     )
 
 
-def query_sample_messages_by_message_id_range(
+def query_sample_messages_by_message_id_range_page(
     app_name: Any,
     *,
     start_message_id: Any | None = None,
     end_message_id: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
     dynamodb_resource: Any | None = None,
     scan_index_forward: bool = True,
     consistent_read: bool = False,
     limit: int | None = None,
-) -> list[SampleMessagesItem]:
+) -> SampleMessagesPage:
     from boto3.dynamodb.conditions import Key
 
     key_condition = Key("app_name").eq(app_name)
@@ -158,10 +166,37 @@ def query_sample_messages_by_message_id_range(
         "ScanIndexForward": scan_index_forward,
         "ConsistentRead": consistent_read,
     }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
     if limit is not None:
         query_args["Limit"] = limit
     response = _table(SAMPLE_MESSAGES_TABLE, dynamodb_resource).query(**query_args)
-    return [cast(SampleMessagesItem, item) for item in response.get("Items", [])]
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(SampleMessagesItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_sample_messages_by_message_id_range(
+    app_name: Any,
+    *,
+    start_message_id: Any | None = None,
+    end_message_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[SampleMessagesItem]:
+    return query_sample_messages_by_message_id_range_page(
+        app_name,
+        start_message_id=start_message_id,
+        end_message_id=end_message_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
 
 
 def query_sample_messages(

@@ -2,21 +2,60 @@
 
 export type AgentRequest = Record<string, unknown>;
 
-export type AgentResponse = {
+export type AgentMessage = {
+  messageId: string;
+  createdAt: string;
   message: string;
+};
+
+export type AgentResponse = {
+  action?: string;
+  message?: string;
   lastMessage?: string;
+  item?: AgentMessage;
+  messages?: AgentMessage[];
+  nextKey?: Record<string, unknown> | null;
   agent: string;
   mocked: boolean;
   stored?: boolean;
 };
 
+const mockSampleAgentMessages: AgentMessage[] = [];
+
 export async function mockCallSampleAgent(payload: AgentRequest = {}): Promise<AgentResponse> {
-  const lastMessage = typeof payload.message === "string" ? payload.message : "lambda was called";
+  const action = typeof payload.action === "string" ? payload.action : "store_message";
+  if (action === "list_messages") {
+    const limit = typeof payload.limit === "number" ? Math.max(1, Math.min(payload.limit, 50)) : 10;
+    const nextKey = payload.nextKey && typeof payload.nextKey === "object" ? (payload.nextKey as Record<string, unknown>) : undefined;
+    const offset = typeof nextKey?.offset === "number" ? nextKey.offset : 0;
+    const messages = mockSampleAgentMessages.slice(offset, offset + limit);
+    const newOffset = offset + messages.length;
+    return {
+      action: "list_messages",
+      messages,
+      nextKey: newOffset < mockSampleAgentMessages.length ? { offset: newOffset } : null,
+      agent: "sample_agent",
+      mocked: true,
+    };
+  }
+
+  const message = typeof payload.message === "string" ? payload.message.trim() : "";
+  if (!message) {
+    throw new Error("message is required");
+  }
+  const createdAt = new Date().toISOString();
+  const item = {
+    messageId: `${createdAt}#mock`,
+    createdAt,
+    message,
+  };
+  mockSampleAgentMessages.unshift(item);
   return {
-    message: `lambda was called: ${lastMessage}`,
-    lastMessage,
+    action: "store_message",
+    message: "message stored",
+    item,
     agent: "sample_agent",
     mocked: true,
-    stored: false,
+    stored: true,
   };
 }

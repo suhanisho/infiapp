@@ -5,7 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/infiapp-webui-tests.XXXXXX")"
 WEBUI_LOG="$TMP_DIR/webui.log"
-SAMPLE_RESPONSE="$TMP_DIR/sample-response.json"
+STORE_RESPONSE="$TMP_DIR/store-response.json"
+LIST_RESPONSE="$TMP_DIR/list-response.json"
 
 stop_process_group() {
   local pid="$1"
@@ -45,23 +46,31 @@ assert_contains() {
   fi
 }
 
-wait_for_sample_api() {
+wait_for_messages_api() {
   for _ in $(seq 1 60); do
     if curl --fail --silent --show-error \
       -X POST \
       -H "content-type: application/json" \
       --data '{"message":"ci smoke"}' \
-      "http://127.0.0.1:3000/api/sample" >"$SAMPLE_RESPONSE"; then
-      assert_contains "$SAMPLE_RESPONSE" "ci smoke"
-      assert_contains "$SAMPLE_RESPONSE" "\"mocked\":true"
-      return 0
+      "http://127.0.0.1:3000/api/sample/messages" >"$STORE_RESPONSE"; then
+      assert_contains "$STORE_RESPONSE" "ci smoke"
+      assert_contains "$STORE_RESPONSE" "\"action\":\"store_message\""
+      assert_contains "$STORE_RESPONSE" "\"mocked\":true"
+      break
     fi
 
     sleep 1
   done
 
-  echo "Timed out waiting for /api/sample"
-  return 1
+  if [[ ! -s "$STORE_RESPONSE" ]]; then
+    echo "Timed out waiting for /api/sample/messages"
+    return 1
+  fi
+
+  curl --fail --silent --show-error \
+    "http://127.0.0.1:3000/api/sample/messages?limit=5" >"$LIST_RESPONSE"
+  assert_contains "$LIST_RESPONSE" "ci smoke"
+  assert_contains "$LIST_RESPONSE" "\"action\":\"list_messages\""
 }
 
 setsid env \
@@ -70,4 +79,4 @@ setsid env \
   npm --prefix "$ROOT_DIR" run start -- -H 127.0.0.1 -p 3000 >"$WEBUI_LOG" 2>&1 &
 WEBUI_PID=$!
 
-wait_for_sample_api
+wait_for_messages_api

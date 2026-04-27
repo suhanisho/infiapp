@@ -60,9 +60,19 @@ h1 {
 
 .backend-panel {
   display: grid;
-  min-width: min(100%, 420px);
+  width: min(100%, 560px);
+  gap: 14px;
+}
+
+.message-form,
+.message-actions {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
+}
+
+.message-actions {
+  grid-template-columns: repeat(2, minmax(0, max-content));
 }
 
 label {
@@ -111,7 +121,6 @@ button:focus-visible {
 }
 
 .result {
-  grid-column: 1 / -1;
   min-width: 180px;
   margin: 0;
   color: var(--muted);
@@ -126,13 +135,42 @@ button:focus-visible {
   color: var(--error);
 }
 
+.message-list {
+  display: grid;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+  overflow: auto;
+}
+
+.message-list li {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.message-list span {
+  overflow-wrap: anywhere;
+}
+
+.message-list time {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 @media (max-width: 520px) {
   .shell {
     padding: 24px;
     place-items: end start;
   }
 
-  .backend-panel {
+  .message-form,
+  .message-actions {
     grid-template-columns: 1fr;
   }
 
