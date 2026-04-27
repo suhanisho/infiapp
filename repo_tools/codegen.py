@@ -66,7 +66,12 @@ def load_tables() -> list[dict[str, Any]]:
 
 
 def load_agents() -> list[dict[str, Any]]:
-    return [load_json(agent_dir / "spec.json") for agent_dir in iter_agent_dirs()]
+    agents: list[dict[str, Any]] = []
+    for agent_dir in iter_agent_dirs():
+        spec = load_json(agent_dir / "spec.json")
+        spec["name"] = agent_dir.name
+        agents.append(spec)
+    return agents
 
 
 def render_python_value(value: Any, indent: int = 0) -> str:

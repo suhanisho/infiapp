@@ -131,7 +131,7 @@ def external_agent_names() -> list[str]:
     for agent_dir in iter_agent_dirs():
         spec = load_json(agent_dir / "spec.json")
         if spec["connectivity"] == "external":
-            names.append(spec["name"])
+            names.append(agent_dir.name)
     return sorted(names)
 
 
@@ -306,7 +306,7 @@ def deploy_agents() -> None:
         tmp_dir = Path(tmp)
         for agent_dir in iter_agent_dirs():
             spec = load_json(agent_dir / "spec.json")
-            function_name = spec["name"]
+            function_name = agent_dir.name
             role_arn = ensure_agent_role(function_name)
             zip_path = tmp_dir / f"{function_name}.zip"
             zip_agent(agent_dir, zip_path)

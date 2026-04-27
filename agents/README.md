@@ -19,7 +19,6 @@ agents/<agent_name>/
 
 ```json
 {
-  "name": "sample_agent",
   "description": "Stores and echoes sample messages for the starter app.",
   "connectivity": "external",
   "memory_mb": 128,
@@ -33,7 +32,6 @@ agents/<agent_name>/
 
 Fields:
 
-- `name`: must match the agent folder name.
 - `description`: non-empty human-readable purpose.
 - `connectivity`: `internal` or `external`.
 - `memory_mb`: Lambda memory size in MB, from 128 through 10240.
@@ -44,6 +42,7 @@ Fields:
 Framework defaults:
 
 - Runtime is always Python 3.11.
+- Agent name and Lambda function name are inferred from the `agents/<agent_name>/` folder.
 - Handler is always `agents/<agent_name>/code/handler.py` with a `lambda_handler` function.
 - Each agent automatically receives full access to DynamoDB tables declared under `dynamodb/<agent_name>/`.
 - External agents get generated WebUI clients and are invoked by the deployed WebUI through Vercel OIDC IAM access.

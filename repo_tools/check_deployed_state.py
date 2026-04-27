@@ -69,7 +69,7 @@ def check_agents() -> list[str]:
     errors: list[str] = []
     for agent_dir in iter_agent_dirs():
         spec = load_json(agent_dir / "spec.json")
-        function_name = spec["name"]
+        function_name = agent_dir.name
         code, data = run_json(["aws", "lambda", "get-function", "--function-name", function_name])
         if code != 0:
             errors.append(f"Lambda function missing or inaccessible: {function_name}")
@@ -101,7 +101,7 @@ def check_vercel_oidc_access() -> list[str]:
     for agent_dir in iter_agent_dirs():
         spec = load_json(agent_dir / "spec.json")
         if spec["connectivity"] == "external":
-            external_agents.append(spec["name"])
+            external_agents.append(agent_dir.name)
     if not external_agents:
         return errors
 

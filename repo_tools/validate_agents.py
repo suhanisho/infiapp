@@ -20,7 +20,6 @@ from repo_tools.python_dependencies import (
 VALID_CONNECTIVITY = {"internal", "external"}
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 REQUIRED_FIELDS = {
-    "name": str,
     "description": str,
     "connectivity": str,
     "memory_mb": int,
@@ -70,12 +69,8 @@ def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[
     if extra_fields:
         errors.append(f"{repo_relative(spec_path)}: unexpected field(s): {extra_fields}")
 
-    name = spec.get("name")
-    if isinstance(name, str):
-        if name != agent_dir.name:
-            errors.append(f"{repo_relative(spec_path)}: name must match folder '{agent_dir.name}'")
-        if not AGENT_NAME_RE.fullmatch(name):
-            errors.append(f"{repo_relative(spec_path)}: name must be lowercase snake_case")
+    if not AGENT_NAME_RE.fullmatch(agent_dir.name):
+        errors.append(f"{repo_relative(agent_dir)}: folder name must be lowercase snake_case")
 
     description = spec.get("description")
     if isinstance(description, str) and not description.strip():
@@ -129,6 +124,7 @@ def load_external_agents() -> list[dict[str, Any]]:
     for agent_dir in iter_agent_dirs():
         spec = load_json(agent_dir / "spec.json")
         if spec["connectivity"] == "external":
+            spec["name"] = agent_dir.name
             agents.append(spec)
     return agents
 
