@@ -1,0 +1,7 @@
+{
+  "name": "hello_agent",
+  "description": "Starter external Lambda agent for the Infiloop demo app.",
+  "connectivity": "external",
+  "handler": "handler.lambda_handler"
+}
+
