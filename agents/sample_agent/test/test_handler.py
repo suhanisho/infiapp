@@ -65,7 +65,7 @@ class SampleAgentTest(unittest.TestCase):
                 {
                     "action": "list_messages",
                     "limit": 5,
-                    "nextKey": {"app_name": "infiapp", "message_id": "message-0"},
+                    "nextMessageId": "message-0",
                 }
             )
 
@@ -73,7 +73,7 @@ class SampleAgentTest(unittest.TestCase):
         body = json.loads(response["body"])
         self.assertNotIn("action", body)
         self.assertEqual(body["messages"][0]["message"], "latest")
-        self.assertEqual(body["nextKey"], {"app_name": "infiapp", "message_id": "message-1"})
+        self.assertEqual(body["nextMessageId"], "message-1")
         query.assert_called_once_with(
             "infiapp",
             exclusive_start_key={"app_name": "infiapp", "message_id": "message-0"},

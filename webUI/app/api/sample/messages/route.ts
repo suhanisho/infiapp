@@ -12,26 +12,12 @@ function parseLimit(value: string | null): number {
   return Math.max(1, Math.min(parsed, 50));
 }
 
-function parseNextKey(value: string | null): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const response = await callSampleAgentListMessages({
       limit: parseLimit(url.searchParams.get("limit")),
-      nextKey: parseNextKey(url.searchParams.get("nextKey")),
+      nextMessageId: url.searchParams.get("nextMessageId"),
     });
     return NextResponse.json(response);
   } catch (error) {

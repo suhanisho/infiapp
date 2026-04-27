@@ -16,7 +16,7 @@ export function BackendButton() {
   const [input, setInput] = useState("sample message from the web");
   const [statusMessage, setStatusMessage] = useState("");
   const [messages, setMessages] = useState<MessageItem[]>([]);
-  const [nextKey, setNextKey] = useState<Record<string, unknown> | null>(null);
+  const [nextMessageId, setNextMessageId] = useState<string | null>(null);
 
   async function storeMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -49,21 +49,21 @@ export function BackendButton() {
     setListState("loading");
     try {
       const params = new URLSearchParams({ limit: "5" });
-      const cursor = reset ? null : nextKey;
+      const cursor = reset ? null : nextMessageId;
       if (cursor) {
-        params.set("nextKey", JSON.stringify(cursor));
+        params.set("nextMessageId", cursor);
       }
       const response = await fetch(`/api/sample/messages?${params.toString()}`);
       const body = (await response.json()) as {
         messages?: MessageItem[];
-        nextKey?: Record<string, unknown> | null;
+        nextMessageId?: string | null;
         error?: string;
       };
       if (!response.ok) {
         throw new Error(body.error || "Backend call failed");
       }
       setMessages((current) => (reset ? body.messages || [] : [...current, ...(body.messages || [])]));
-      setNextKey(body.nextKey || null);
+      setNextMessageId(body.nextMessageId || null);
       setListState("success");
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Backend call failed");
@@ -92,7 +92,7 @@ export function BackendButton() {
         <button type="button" onClick={() => void loadMessages(true)} disabled={listState === "loading"}>
           {listState === "loading" ? "Loading..." : "List messages"}
         </button>
-        <button type="button" onClick={() => void loadMessages(false)} disabled={!nextKey || listState === "loading"}>
+        <button type="button" onClick={() => void loadMessages(false)} disabled={!nextMessageId || listState === "loading"}>
           Load more
         </button>
       </div>

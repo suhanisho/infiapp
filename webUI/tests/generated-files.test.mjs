@@ -17,5 +17,5 @@ test("generated web agent client exposes sample agent", async () => {
   assert.match(mockSource, /SampleAgentStoreMessageInput/);
   assert.match(mockSource, /SampleAgentListMessagesOutput/);
   assert.match(mockSource, /list_messages/);
-  assert.match(mockSource, /nextKey/);
+  assert.match(mockSource, /nextMessageId/);
 });
