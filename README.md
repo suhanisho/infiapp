@@ -55,23 +55,21 @@ Example:
 ```json
 {
   "table_name": "sample_messages",
-  "owner_agent": "sample_agent",
-  "billing_mode": "PAY_PER_REQUEST",
   "primary_key": {
     "partition_key": {
       "name": "app_name",
-      "type": "S"
+      "type": "String"
     },
     "sort_key": {
       "name": "message_id",
-      "type": "S"
+      "type": "String"
     }
   },
   "attributes": {
-    "app_name": "S",
-    "message_id": "S",
-    "created_at": "S",
-    "message": "S"
+    "app_name": "String",
+    "message_id": "String",
+    "created_at": "String",
+    "message": "String"
   }
 }
 ```
@@ -79,10 +77,11 @@ Example:
 Compatibility rules:
 
 - The table file path owns the table identity.
-- `table_name` and `owner_agent` are required.
-- `owner_agent` must match the parent folder.
+- The owning agent is inferred from the parent folder.
+- Billing mode is hardcoded to `PAY_PER_REQUEST`.
 - Partition key and sort key names and types are backwards compatible and must not change after deployment.
 - Non-key attributes may be added, changed, or removed.
+- Supported attribute types are documented in `dynamodb/README.md`.
 - The validator compares against `.infiapp/table-key-baseline.json` when present. Generate or refresh the baseline intentionally after the first accepted table definition.
 
 ## WebUI

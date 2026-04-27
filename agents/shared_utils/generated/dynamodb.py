@@ -6,19 +6,19 @@ from typing import Any
 
 SAMPLE_MESSAGES_TABLE: dict[str, Any] = {
     "attributes": {
-        "app_name": 'S',
-        "created_at": 'S',
-        "message": 'S',
-        "message_id": 'S',
+        "app_name": 'String',
+        "created_at": 'String',
+        "message": 'String',
+        "message_id": 'String',
     },
     "owner_agent": 'sample_agent',
     "partition_key": {
         "name": 'app_name',
-        "type": 'S',
+        "type": 'String',
     },
     "sort_key": {
         "name": 'message_id',
-        "type": 'S',
+        "type": 'String',
     },
     "table_name": 'sample_messages',
 }

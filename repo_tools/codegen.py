@@ -30,7 +30,12 @@ def pascal_name(name: str) -> str:
 
 
 def load_tables() -> list[dict[str, Any]]:
-    return [load_json(path) for path in iter_table_paths()]
+    tables: list[dict[str, Any]] = []
+    for path in iter_table_paths():
+        table = load_json(path)
+        table["owner_agent"] = path.parent.name
+        tables.append(table)
+    return tables
 
 
 def load_agents() -> list[dict[str, Any]]:

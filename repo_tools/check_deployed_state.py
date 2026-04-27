@@ -13,6 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from repo_tools.common import iter_agent_dirs, iter_table_paths, load_json
 
+AWS_ATTRIBUTE_TYPES = {
+    "String": "S",
+    "Number": "N",
+    "Binary": "B",
+}
+
 
 def run_json(command: list[str]) -> tuple[int, dict[str, Any]]:
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -43,7 +49,7 @@ def check_tables() -> list[str]:
         if key_schema != expected_schema:
             errors.append(f"{table['table_name']}: key schema differs from repo definition")
         for key in (expected_pk, expected_sk):
-            if key and attr_defs.get(key["name"]) != key["type"]:
+            if key and attr_defs.get(key["name"]) != AWS_ATTRIBUTE_TYPES[key["type"]]:
                 errors.append(f"{table['table_name']}: key attribute {key['name']} type differs")
     return errors
 

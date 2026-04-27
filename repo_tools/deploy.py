@@ -18,6 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from repo_tools.common import AGENTS_DIR, REPO_ROOT, WEBUI_DIR, iter_agent_dirs, iter_table_paths, load_json
 
+AWS_ATTRIBUTE_TYPES = {
+    "String": "S",
+    "Number": "N",
+    "Binary": "B",
+}
+
 
 def run(command: list[str], *, cwd: Path = REPO_ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
     print("+", " ".join(command))
@@ -43,11 +49,13 @@ def deploy_tables() -> None:
         pk = table["primary_key"]["partition_key"]
         sk = table["primary_key"].get("sort_key")
         attr_defs = [
-            {"AttributeName": pk["name"], "AttributeType": pk["type"]},
+            {"AttributeName": pk["name"], "AttributeType": AWS_ATTRIBUTE_TYPES[pk["type"]]},
         ]
         key_schema = [{"AttributeName": pk["name"], "KeyType": "HASH"}]
         if sk:
-            attr_defs.append({"AttributeName": sk["name"], "AttributeType": sk["type"]})
+            attr_defs.append(
+                {"AttributeName": sk["name"], "AttributeType": AWS_ATTRIBUTE_TYPES[sk["type"]]}
+            )
             key_schema.append({"AttributeName": sk["name"], "KeyType": "RANGE"})
 
         run(
@@ -68,7 +76,7 @@ def deploy_tables() -> None:
 
 
 def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
-    return [load_json(path) for path in iter_table_paths() if load_json(path)["owner_agent"] == agent_name]
+    return [load_json(path) for path in iter_table_paths() if path.parent.name == agent_name]
 
 
 def ensure_agent_role(agent_name: str) -> str:

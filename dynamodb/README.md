@@ -3,23 +3,29 @@
 Each DynamoDB table is declared as one JSON file under the owning agent folder:
 
 ```text
-dynamodb/<owner_agent>/<table_id>.json
+dynamodb/<agent_name>/<table_id>.json
 ```
 
 Required fields:
 
 - `table_name`: deployed DynamoDB table name.
-- `owner_agent`: agent that owns the table. Must match the parent folder name.
-- `billing_mode`: currently `PAY_PER_REQUEST`.
-- `primary_key.partition_key`: object with `name` and DynamoDB scalar `type`.
-- `primary_key.sort_key`: object with `name` and DynamoDB scalar `type`, or `null`.
-- `attributes`: object mapping attribute names to DynamoDB scalar types.
+- `primary_key.partition_key`: object with `name` and repo scalar `type`.
+- `primary_key.sort_key`: object with `name` and repo scalar `type`, or `null`.
+- `attributes`: object mapping attribute names to repo scalar types.
 
-Supported scalar types:
+Inferred/defaulted fields:
 
-- `S`
-- `N`
-- `B`
+- The owning agent is inferred from the parent folder name.
+- Billing mode is hardcoded to `PAY_PER_REQUEST`.
+
+Supported attribute types:
+
+- `String`
+- `Number`
+- `Binary`
+- `Boolean`
+
+Partition and sort keys must use `String`, `Number`, or `Binary`. Repo tools map these to DynamoDB API types `S`, `N`, and `B` during deploy and deployed-state verification.
 
 Backwards compatibility:
 

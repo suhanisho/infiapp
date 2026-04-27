@@ -40,7 +40,7 @@ Framework defaults:
 - Agents are manually triggered by default.
 - Agent specs do not declare IAM policy JSON.
 - Agent specs do not declare environment variables or event triggers yet.
-- Each agent automatically receives full access to DynamoDB tables whose `owner_agent` matches the agent name.
+- Each agent automatically receives full access to DynamoDB tables declared under `dynamodb/<agent_name>/`.
 - External agents get generated WebUI clients and are intended to be callable through Lambda Function URLs.
 
 ## Code
@@ -67,4 +67,3 @@ python3 -m unittest discover -s agents -p 'test_*.py'
 ```
 
 The GitHub workflow `.github/workflows/test-agents.yml` runs these checks on pull requests and pushes to `main`.
-

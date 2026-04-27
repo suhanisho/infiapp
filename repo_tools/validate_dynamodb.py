@@ -19,14 +19,15 @@ from repo_tools.common import (
     repo_relative,
 )
 
-VALID_ATTRIBUTE_TYPES = {"S", "N", "B"}
+VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean"}
+VALID_KEY_TYPES = {"String", "Number", "Binary"}
+INFERRED_OR_DEFAULTED_FIELDS = {"owner_agent", "billing_mode"}
 
 
 def key_signature(table: dict[str, Any]) -> dict[str, Any]:
     primary_key = table["primary_key"]
     return {
         "table_name": table["table_name"],
-        "owner_agent": table["owner_agent"],
         "partition_key": primary_key["partition_key"],
         "sort_key": primary_key.get("sort_key"),
     }
@@ -43,8 +44,10 @@ def validate_key(path: Path, key: object, label: str, *, required: bool = True) 
     key_type = key.get("type")
     if not isinstance(name, str) or not name:
         errors.append(f"{repo_relative(path)}: {label}.name must be a non-empty string")
-    if key_type not in {"S", "N", "B"}:
-        errors.append(f"{repo_relative(path)}: {label}.type must be S, N, or B")
+    if key_type not in VALID_KEY_TYPES:
+        errors.append(
+            f"{repo_relative(path)}: {label}.type must be one of {sorted(VALID_KEY_TYPES)}"
+        )
     return errors
 
 
@@ -57,8 +60,6 @@ def validate_table(path: Path) -> list[str]:
     errors: list[str] = []
     required_fields = {
         "table_name": str,
-        "owner_agent": str,
-        "billing_mode": str,
         "primary_key": dict,
         "attributes": dict,
     }
@@ -72,10 +73,12 @@ def validate_table(path: Path) -> list[str]:
     if errors:
         return errors
 
-    if table["owner_agent"] != path.parent.name:
-        errors.append(f"{repo_relative(path)}: owner_agent must match parent folder")
-    if table["billing_mode"] != "PAY_PER_REQUEST":
-        errors.append(f"{repo_relative(path)}: billing_mode must be PAY_PER_REQUEST")
+    extra_fields = sorted(set(table) - set(required_fields))
+    inferred_fields = sorted(set(extra_fields) & INFERRED_OR_DEFAULTED_FIELDS)
+    for field in inferred_fields:
+        errors.append(f"{repo_relative(path)}: '{field}' is inferred/defaulted and must be omitted")
+    for field in sorted(set(extra_fields) - INFERRED_OR_DEFAULTED_FIELDS):
+        errors.append(f"{repo_relative(path)}: unexpected field '{field}'")
 
     primary_key = table["primary_key"]
     errors.extend(validate_key(path, primary_key.get("partition_key"), "partition_key"))
@@ -86,7 +89,10 @@ def validate_table(path: Path) -> list[str]:
         if not isinstance(attr_name, str) or not attr_name:
             errors.append(f"{repo_relative(path)}: attribute names must be non-empty strings")
         if attr_type not in VALID_ATTRIBUTE_TYPES:
-            errors.append(f"{repo_relative(path)}: attribute '{attr_name}' type must be S, N, or B")
+            errors.append(
+                f"{repo_relative(path)}: attribute '{attr_name}' type must be one of "
+                f"{sorted(VALID_ATTRIBUTE_TYPES)}"
+            )
 
     for label in ("partition_key", "sort_key"):
         key = primary_key.get(label)
