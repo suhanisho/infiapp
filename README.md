@@ -149,7 +149,7 @@ The generated files are:
 
 Required local tools:
 
-- Python 3.11 for Lambda parity. Python 3.10 can run the current repo tools locally, but CI and Lambda use 3.11.
+- Python 3.11 for Lambda parity.
 - Node.js 22.
 - npm 10 or newer.
 - AWS CLI v2 for deploy and deployed-state verification.
