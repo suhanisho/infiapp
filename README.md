@@ -117,22 +117,6 @@ INFIAPP_AGENT_BACKEND_MODE=mock npm --prefix webUI run dev
 
 Open `http://localhost:3000` in a browser. The starter page should show `Hi from infiapp`; store a message and list messages to exercise the WebUI flow against the mock backend without deploying AWS resources.
 
-## CI
-
-The test workflows run on pull requests and pushes to `main`:
-
-- `.github/workflows/test-agents.yml` validates agent specs, runs all agent tests, and compiles Python tooling.
-- `.github/workflows/test-db.yml` validates DynamoDB table specs and fails if generated files are stale.
-- `.github/workflows/test-webUI.yml` installs `webUI`, builds it, and runs Playwright E2E plus screenshot tests.
-
-## Operations
-
-Production operations are manual and main-only.
-
-Use `.github/workflows/deploy.yml` when you want to apply the repo definition to AWS and Vercel. The workflow has `workflow_dispatch` only, so it must be started manually from GitHub Actions after the desired commit is on `main`.
-
-Use `.github/workflows/verify-deployed-state.yml` when you want to check whether deployed AWS resources still match this repo. This workflow is also `workflow_dispatch` only and only runs from `main`.
-
 ## Deployment
 
 Deployment is intentionally centralized in `.github/workflows/deploy.yml`, is manually triggered, and only runs from `main`.
