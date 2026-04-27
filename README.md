@@ -172,7 +172,7 @@ Create the Vercel secrets:
 
 No need to install the Vercel GitHub app for this repo. Infiapp deploys the WebUI from the GitHub Actions deploy workflow.
 
-Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**. This repo does not require `AWS_ACCOUNT_ID`, `VERCEL_ORG_ID`, or `VERCEL_PROJECT_ID`; the AWS account id is read from the configured AWS credentials and Vercel is configured with `VERCEL_TOKEN` plus `VERCEL_TEAM_ID`.
+Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**.
 
 The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. It also creates a Vercel OIDC role that can invoke external agents. Agent specs do not contain IAM policy JSON.
 
