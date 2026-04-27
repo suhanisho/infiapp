@@ -91,18 +91,16 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install Python dependencies:
-
-```bash
-python -m pip install ".[dev]"
-```
-
-Python dependencies are pinned in root `pyproject.toml`. Agent specs list dependency names in `required_dependencies`, and validation fails if an agent names a dependency that is not pinned there.
-
 Rename the starter app before building on it:
 
 ```bash
 python -m repo_tools rename-app my-app-name --title "My App Name"
+```
+
+Install Python dependencies:
+
+```bash
+python -m pip install ".[dev]"
 ```
 
 Install Node dependencies:
