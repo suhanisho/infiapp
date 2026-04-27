@@ -46,5 +46,5 @@ jobs:
       - name: Validate deployed state
         run: |
           echo "::group::Validate deployed state"
-          python -m repo_tools.check_deployed_state
+          python -m repo_tools.check_deployed_state --summary-out "$GITHUB_STEP_SUMMARY"
           echo "::endgroup::"
