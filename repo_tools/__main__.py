@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -22,6 +23,61 @@ def python_command(*args: str) -> list[str]:
 
 def npm_webui_command(*args: str) -> list[str]:
     return ["npm", "--prefix", "webUI", *args]
+
+
+def title_from_app_name(app_name: str) -> str:
+    return " ".join(part.capitalize() for part in re.split(r"[-_\s]+", app_name) if part)
+
+
+def env_prefix_from_app_name(app_name: str) -> str:
+    prefix = re.sub(r"[^A-Za-z0-9]+", "_", app_name).strip("_").upper()
+    if not prefix:
+        raise ValueError("app name must contain at least one letter or number")
+    if prefix[0].isdigit():
+        prefix = f"APP_{prefix}"
+    return prefix
+
+
+def validate_app_name(app_name: str) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", app_name):
+        raise ValueError(
+            "app name must use lowercase letters, numbers, and hyphens, and start with a letter"
+        )
+
+
+def git_files() -> list[Path]:
+    result = subprocess.run(
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [REPO_ROOT / rel_path for rel_path in result.stdout.splitlines()]
+
+
+def rename_app(app_name: str, app_title: str | None = None) -> None:
+    validate_app_name(app_name)
+    title = app_title or title_from_app_name(app_name)
+    env_prefix = env_prefix_from_app_name(app_name)
+
+    changed: list[Path] = []
+    for path in git_files():
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            continue
+        updated = (
+            text.replace("INFIAPP", env_prefix)
+            .replace("Infiapp", title)
+            .replace("infiapp", app_name)
+        )
+        if updated != text:
+            path.write_text(updated)
+            changed.append(path)
+
+    print(f"Renamed starter app to {title} ({app_name}).")
+    print(f"Updated {len(changed)} tracked text file(s).")
 
 
 def validate_agents() -> None:
@@ -111,10 +167,24 @@ COMMANDS = {
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Infiapp repository tooling")
-    parser.add_argument("command", choices=sorted(COMMANDS))
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for command in sorted(COMMANDS):
+        subparsers.add_parser(command)
+
+    rename_parser = subparsers.add_parser("rename-app", help="Rename the starter app text across tracked files")
+    rename_parser.add_argument("app_name", help="New app slug, such as my-app-name")
+    rename_parser.add_argument("--title", help="Human-readable app title, defaults from app_name")
+
     args = parser.parse_args()
 
-    COMMANDS[args.command]()
+    if args.command == "rename-app":
+        try:
+            rename_app(args.app_name, args.title)
+        except ValueError as exc:
+            parser.error(str(exc))
+    else:
+        COMMANDS[args.command]()
     return 0
 
 

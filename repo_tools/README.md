@@ -38,6 +38,12 @@ Validate generated files are current:
 python -m repo_tools codegen-check
 ```
 
+Rename the starter app after forking:
+
+```bash
+python -m repo_tools rename-app my-app-name --title "My App Name"
+```
+
 Run agent and shared utility tests:
 
 ```bash
