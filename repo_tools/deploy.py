@@ -48,6 +48,14 @@ VERCEL_MANAGED_ENV_KEYS = {
 LAMBDA_HANDLER = "handler.lambda_handler"
 
 
+def vercel_project_path() -> str:
+    return f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}"
+
+
+def vercel_project_env_path() -> str:
+    return f"/v10/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env"
+
+
 def run(
     command: list[str],
     *,
@@ -558,7 +566,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
 def ensure_vercel_project(vercel_token: str, vercel_team_id: str) -> None:
     project = vercel_request_json(
         method="GET",
-        path=f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}",
+        path=vercel_project_path(),
         token=vercel_token,
         team_id=vercel_team_id,
         not_found_ok=True,
@@ -584,7 +592,7 @@ def list_vercel_project_envs(vercel_token: str, vercel_team_id: str) -> list[dic
     while True:
         response = vercel_request_json(
             method="GET",
-            path=f"/v10/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env",
+            path=vercel_project_env_path(),
             token=vercel_token,
             team_id=vercel_team_id,
             query=query,
@@ -611,28 +619,13 @@ def vercel_env_targets(env_entry: dict[str, Any]) -> list[str]:
 
 
 def sync_vercel_oidc_env(vercel_token: str, vercel_team_id: str, values: dict[str, str]) -> None:
-    for env_entry in list_vercel_project_envs(vercel_token, vercel_team_id):
-        key = env_entry.get("key")
-        env_id = env_entry.get("id")
-        if (
-            isinstance(key, str)
-            and key in VERCEL_MANAGED_ENV_KEYS
-            and isinstance(env_id, str)
-            and "production" in vercel_env_targets(env_entry)
-        ):
-            vercel_request_json(
-                method="DELETE",
-                path=f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env/{urllib.parse.quote(env_id)}",
-                token=vercel_token,
-                team_id=vercel_team_id,
-            )
-
     for key, value in sorted(values.items()):
         vercel_request_json(
             method="POST",
-            path=f"/v10/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env",
+            path=vercel_project_env_path(),
             token=vercel_token,
             team_id=vercel_team_id,
+            query={"upsert": "true"},
             body={
                 "key": key,
                 "value": value,
