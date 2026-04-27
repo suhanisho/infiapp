@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from repo_tools.common import (
     REPO_ROOT,
-    TABLE_KEY_BASELINE_PATH,
     iter_table_paths,
     load_json,
     repo_relative,
@@ -22,14 +22,33 @@ from repo_tools.common import (
 VALID_ATTRIBUTE_TYPES = {"String", "Number", "Binary", "Boolean"}
 VALID_KEY_TYPES = {"String", "Number", "Binary"}
 INFERRED_OR_DEFAULTED_FIELDS = {"owner_agent", "billing_mode"}
+LEGACY_TYPE_NAMES = {
+    "S": "String",
+    "N": "Number",
+    "B": "Binary",
+}
+
+
+def normalize_type_name(type_name: object) -> object:
+    if isinstance(type_name, str):
+        return LEGACY_TYPE_NAMES.get(type_name, type_name)
+    return type_name
+
+
+def normalized_key_signature(key: object) -> object:
+    if not isinstance(key, dict):
+        return key
+    normalized = dict(key)
+    normalized["type"] = normalize_type_name(normalized.get("type"))
+    return normalized
 
 
 def key_signature(table: dict[str, Any]) -> dict[str, Any]:
     primary_key = table["primary_key"]
     return {
         "table_name": table["table_name"],
-        "partition_key": primary_key["partition_key"],
-        "sort_key": primary_key.get("sort_key"),
+        "partition_key": normalized_key_signature(primary_key["partition_key"]),
+        "sort_key": normalized_key_signature(primary_key.get("sort_key")),
     }
 
 
@@ -109,14 +128,6 @@ def validate_table(path: Path) -> list[str]:
     return errors
 
 
-def load_baseline() -> dict[str, dict[str, Any]]:
-    if TABLE_KEY_BASELINE_PATH.exists():
-        data = json.loads(TABLE_KEY_BASELINE_PATH.read_text())
-        if isinstance(data, dict):
-            return data
-    return {}
-
-
 def load_git_base_table(path: Path, base_ref: str) -> dict[str, Any] | None:
     rel_path = repo_relative(path)
     result = subprocess.run(
@@ -135,16 +146,50 @@ def load_git_base_table(path: Path, base_ref: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def git_output(command: list[str]) -> str | None:
+    result = subprocess.run(
+        ["git", *command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def resolve_base_ref() -> str | None:
+    """Return the git ref used for DynamoDB key compatibility checks."""
+    event_name = os.environ.get("GITHUB_EVENT_NAME")
+    base_ref = os.environ.get("GITHUB_BASE_REF")
+    github_ref = os.environ.get("GITHUB_REF")
+
+    if event_name == "pull_request" and base_ref:
+        return f"origin/{base_ref}"
+
+    if github_ref == "refs/heads/main":
+        return "HEAD^"
+
+    current_branch = git_output(["branch", "--show-current"])
+    if current_branch == "main":
+        return "HEAD^"
+
+    if git_output(["rev-parse", "--verify", "origin/main"]) is not None:
+        return "origin/main"
+
+    if git_output(["rev-parse", "--verify", "HEAD^"]) is not None:
+        return "HEAD^"
+
+    return None
+
+
 def check_compatibility(path: Path, base_ref: str) -> list[str]:
     current = load_json(path)
-    baseline = load_baseline()
-    base_signature = baseline.get(repo_relative(path))
-
-    if base_signature is None:
-        base_table = load_git_base_table(path, base_ref)
-        if base_table is None:
-            return []
-        base_signature = key_signature(base_table)
+    base_table = load_git_base_table(path, base_ref)
+    if base_table is None:
+        return []
+    base_signature = key_signature(base_table)
 
     current_signature = key_signature(current)
     if base_signature != current_signature:
@@ -157,7 +202,7 @@ def check_compatibility(path: Path, base_ref: str) -> list[str]:
 
 
 def main() -> int:
-    base_ref = "origin/main"
+    base_ref = resolve_base_ref()
     table_paths = iter_table_paths()
     errors: list[str] = []
     if not table_paths:
@@ -165,7 +210,7 @@ def main() -> int:
 
     for path in table_paths:
         errors.extend(validate_table(path))
-        if not errors:
+        if base_ref is not None and not errors:
             errors.extend(check_compatibility(path, base_ref))
 
     if errors:
@@ -174,7 +219,8 @@ def main() -> int:
             print(f"  ERROR: {error}")
         return 1
 
-    print(f"Validated {len(table_paths)} DynamoDB table spec(s).")
+    compatibility_note = f" against {base_ref}" if base_ref is not None else ""
+    print(f"Validated {len(table_paths)} DynamoDB table spec(s){compatibility_note}.")
     return 0
 
 

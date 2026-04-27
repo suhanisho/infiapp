@@ -82,7 +82,8 @@ Compatibility rules:
 - Partition key and sort key names and types are backwards compatible and must not change after deployment.
 - Non-key attributes may be added, changed, or removed.
 - Supported attribute types are documented in `dynamodb/README.md`.
-- The validator compares against `.infiapp/table-key-baseline.json` when present. Generate or refresh the baseline intentionally after the first accepted table definition.
+- On pull requests, the validator checks key compatibility against `main`.
+- On `main`, the validator checks key compatibility against the previous commit.
 
 ## WebUI
 
