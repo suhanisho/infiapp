@@ -3,8 +3,7 @@
   "python.terminal.activateEnvironment": true,
   "python.analysis.autoSearchPaths": true,
   "python.analysis.extraPaths": [
-    "${workspaceFolder}/agents/shared_utils",
-    "${workspaceFolder}/agents/sample_agent/code"
+    "${workspaceFolder}/agents/shared_utils"
   ],
   "python.testing.unittestEnabled": true,
   "python.testing.unittestArgs": [
