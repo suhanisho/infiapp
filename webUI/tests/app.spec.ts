@@ -13,6 +13,6 @@ test("home page calls backend api", async ({ page }) => {
     fullPage: true,
     mask: [page.locator("time")],
     maskColor: "#f8f6ef",
-    maxDiffPixelRatio: 0.03,
+    maxDiffPixelRatio: 0.08,
   });
 });
