@@ -50,44 +50,40 @@ def ts_property_name(name: str) -> str:
     return json.dumps(name)
 
 
-def ts_type_from_schema(schema: dict[str, Any]) -> str:
-    if "const" in schema:
-        const_value = schema["const"]
-        base_type = json.dumps(const_value) if isinstance(const_value, str) else repr(const_value).lower()
-    else:
-        schema_type = schema.get("type")
-        if schema_type == "string":
-            base_type = "string"
-        elif schema_type == "number":
-            base_type = "number"
-        elif schema_type == "boolean":
-            base_type = "boolean"
-        elif schema_type == "null":
-            base_type = "null"
-        elif schema_type == "array":
-            base_type = f"{ts_type_from_schema(schema['items'])}[]"
-        elif schema_type == "object":
-            properties = schema.get("properties", {})
-            additional_properties = schema.get("additionalProperties")
-            if not properties and additional_properties:
-                if isinstance(additional_properties, dict):
-                    value_type = ts_type_from_schema(additional_properties)
-                    base_type = f"Record<string, {value_type}>"
-                else:
-                    base_type = "Record<string, unknown>"
-            else:
-                required = set(schema.get("required", []))
-                fields = []
-                for name, value in sorted(properties.items()):
-                    optional = "" if name in required else "?"
-                    fields.append(f"{ts_property_name(name)}{optional}: {ts_type_from_schema(value)};")
-                base_type = "{ " + " ".join(fields) + " }"
-        else:
-            base_type = "unknown"
+def ts_type_atom(type_name: str) -> str:
+    if type_name.startswith("Literal[") and type_name.endswith("]"):
+        value = type_name.removeprefix("Literal[").removesuffix("]")
+        return json.dumps(value)
+    return {
+        "String": "string",
+        "Number": "number",
+        "Boolean": "boolean",
+        "Binary": "Uint8Array",
+        "Map": "Record<string, unknown>",
+        "List": "unknown[]",
+        "Any": "unknown",
+        "Null": "null",
+    }.get(type_name, "unknown")
 
-    if schema.get("nullable") and base_type != "null":
-        return f"{base_type} | null"
-    return base_type
+
+def ts_type_from_schema(schema: Any) -> str:
+    if isinstance(schema, str):
+        return " | ".join(ts_type_atom(part.strip()) for part in schema.split("|"))
+
+    if isinstance(schema, list):
+        if len(schema) != 1:
+            return "unknown[]"
+        return f"{ts_type_from_schema(schema[0])}[]"
+
+    if isinstance(schema, dict):
+        fields = []
+        for name, value in sorted(schema.items()):
+            optional = "?" if name.endswith("?") else ""
+            clean_name = name[:-1] if optional else name
+            fields.append(f"{ts_property_name(clean_name)}{optional}: {ts_type_from_schema(value)};")
+        return "{ " + " ".join(fields) + " }"
+
+    return "unknown"
 
 
 def typed_dict_name(table_name: str) -> str:
@@ -483,7 +479,6 @@ def render_mock_agents_ts(agents: list[dict[str, Any]]) -> str:
                 f"    const messages = {store_name}.slice(offset, offset + limit);",
                 f"    const newOffset = offset + messages.length;",
                 "    return {",
-                '      action: "list_messages",',
                 "      messages,",
                 f"      nextKey: newOffset < {store_name}.length ? {{ offset: newOffset }} : null,",
                 "    };",
@@ -502,7 +497,6 @@ def render_mock_agents_ts(agents: list[dict[str, Any]]) -> str:
                 "    };",
                 f"    {store_name}.unshift(item);",
                 "    return {",
-                '      action: "store_message",',
                 '      message: "message stored",',
                 "      item,",
                 "      stored: true,",

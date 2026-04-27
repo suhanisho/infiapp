@@ -40,7 +40,7 @@ class SampleAgentTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
-        self.assertEqual(body["action"], "store_message")
+        self.assertNotIn("action", body)
         self.assertEqual(body["message"], "message stored")
         self.assertEqual(body["item"]["message"], "sample note")
         self.assertNotIn("agent", body)
@@ -71,7 +71,7 @@ class SampleAgentTest(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
-        self.assertEqual(body["action"], "list_messages")
+        self.assertNotIn("action", body)
         self.assertEqual(body["messages"][0]["message"], "latest")
         self.assertEqual(body["nextKey"], {"app_name": "infiapp", "message_id": "message-1"})
         query.assert_called_once_with(

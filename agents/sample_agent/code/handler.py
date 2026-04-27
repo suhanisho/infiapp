@@ -75,7 +75,6 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
         return json_response(
             200,
             {
-                "action": "list_messages",
                 **page,
             },
         )
@@ -89,7 +88,6 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
 
     item = _store_message(message)
     body = {
-        "action": "store_message",
         "message": "message stored",
         "item": _format_message(item),
         "stored": True,

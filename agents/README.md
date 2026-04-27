@@ -29,19 +29,11 @@ agents/<agent_name>/
       "call": "store_message",
       "description": "Stores one user message.",
       "input": {
-        "type": "object",
-        "required": ["message"],
-        "properties": {
-          "message": { "type": "string" }
-        }
+        "message": "String"
       },
       "output": {
-        "type": "object",
-        "required": ["action", "message"],
-        "properties": {
-          "action": { "type": "string", "const": "store_message" },
-          "message": { "type": "string" }
-        }
+        "message": "String",
+        "stored": "Boolean"
       }
     }
   ],
@@ -63,14 +55,17 @@ Fields:
 
 ## API Interface
 
-`api_context` is the external contract for an agent. `call` is the action name passed to the Lambda, while `input` and `output` use the repo's small schema format:
+`api_context` is the external contract for an agent. `call` is the action name passed to the Lambda. Do not include `action` in output schemas; the call already names the operation.
 
-- `type`: one of `string`, `number`, `boolean`, `object`, `array`, `any`, or `null`.
-- `required`: object field names that must be present.
-- `properties`: object field schemas.
-- `items`: array item schema.
-- `nullable`: allow `null`.
-- `const`: fixed scalar value, useful for response `action` fields.
+`input` and `output` use the repo's compact schema format:
+
+- Required object fields are plain keys, such as `"message": "String"`.
+- Optional object fields end in `?`, such as `"limit?": "Number"`.
+- Scalar types are `String`, `Number`, `Boolean`, `Binary`, `Map`, `List`, `Any`, and `Null`.
+- Unions use `|`, such as `"Map | Null"`.
+- Fixed scalar values use `Literal[value]`.
+- Nested objects are nested JSON objects.
+- Arrays are single-item lists, such as `[{"message": "String"}]`.
 
 Repo codegen uses `api_context` to generate typed WebUI agent clients and local mocks. Add or update API tests when changing it.
 

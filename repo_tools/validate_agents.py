@@ -33,7 +33,7 @@ MEMORY_MB_RANGE = (128, 10_240)
 TIMEOUT_SECONDS_RANGE = (1, 900)
 EPHEMERAL_STORAGE_MB_RANGE = (512, 10_240)
 CALL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-SCHEMA_TYPES = {"string", "number", "boolean", "object", "array", "any", "null"}
+SCHEMA_TYPES = {"String", "Number", "Boolean", "Binary", "Map", "List", "Any", "Null"}
 
 
 def defines_lambda_handler(handler_path: Path) -> bool:
@@ -47,63 +47,42 @@ def defines_lambda_handler(handler_path: Path) -> bool:
     )
 
 
-def validate_schema(path: Path, schema: object, label: str) -> list[str]:
-    if not isinstance(schema, dict):
-        return [f"{repo_relative(path)}: {label} must be an object"]
-
+def validate_schema_type(path: Path, value: str, label: str) -> list[str]:
     errors: list[str] = []
-    schema_type = schema.get("type")
-    if schema_type not in SCHEMA_TYPES:
-        errors.append(f"{repo_relative(path)}: {label}.type must be one of {sorted(SCHEMA_TYPES)}")
+    for part in [item.strip() for item in value.split("|")]:
+        if not part:
+            errors.append(f"{repo_relative(path)}: {label} has an empty union member")
+        elif part.startswith("Literal[") and part.endswith("]"):
+            if not part.removeprefix("Literal[").removesuffix("]"):
+                errors.append(f"{repo_relative(path)}: {label} has an empty Literal[]")
+        elif part not in SCHEMA_TYPES:
+            errors.append(f"{repo_relative(path)}: {label} type must be one of {sorted(SCHEMA_TYPES)}")
+    return errors
+
+
+def validate_schema(path: Path, schema: object, label: str) -> list[str]:
+    if isinstance(schema, str):
+        return validate_schema_type(path, schema, label)
+
+    if isinstance(schema, list):
+        if len(schema) != 1:
+            return [f"{repo_relative(path)}: {label} array schema must contain exactly one item schema"]
+        return validate_schema(path, schema[0], f"{label}[0]")
+
+    if isinstance(schema, dict):
+        errors: list[str] = []
+        for field_name, field_schema in schema.items():
+            if not isinstance(field_name, str) or not field_name:
+                errors.append(f"{repo_relative(path)}: {label} field names must be non-empty strings")
+                continue
+            clean_name = field_name[:-1] if field_name.endswith("?") else field_name
+            if not clean_name:
+                errors.append(f"{repo_relative(path)}: {label} field names must not be only '?'")
+                continue
+            errors.extend(validate_schema(path, field_schema, f"{label}.{clean_name}"))
         return errors
 
-    allowed_fields = {"type", "description", "nullable", "const"}
-    if schema_type == "object":
-        allowed_fields.update({"properties", "required", "additionalProperties"})
-        properties = schema.get("properties", {})
-        if "properties" in schema and not isinstance(properties, dict):
-            errors.append(f"{repo_relative(path)}: {label}.properties must be an object")
-        elif isinstance(properties, dict):
-            for prop_name, prop_schema in properties.items():
-                if not isinstance(prop_name, str) or not prop_name:
-                    errors.append(f"{repo_relative(path)}: {label}.properties keys must be non-empty strings")
-                    continue
-                errors.extend(validate_schema(path, prop_schema, f"{label}.properties.{prop_name}"))
-
-        required = schema.get("required", [])
-        if "required" in schema:
-            if not isinstance(required, list) or not all(isinstance(item, str) for item in required):
-                errors.append(f"{repo_relative(path)}: {label}.required must be a list of strings")
-            elif isinstance(properties, dict):
-                missing_required = sorted(set(required) - set(properties))
-                if missing_required:
-                    errors.append(
-                        f"{repo_relative(path)}: {label}.required references unknown field(s): {missing_required}"
-                    )
-
-        additional_properties = schema.get("additionalProperties")
-        if isinstance(additional_properties, dict):
-            errors.extend(validate_schema(path, additional_properties, f"{label}.additionalProperties"))
-        elif additional_properties is not None and not isinstance(additional_properties, bool):
-            errors.append(f"{repo_relative(path)}: {label}.additionalProperties must be boolean or schema object")
-
-    if schema_type == "array":
-        allowed_fields.add("items")
-        if "items" not in schema:
-            errors.append(f"{repo_relative(path)}: {label}.items is required for arrays")
-        else:
-            errors.extend(validate_schema(path, schema["items"], f"{label}.items"))
-
-    if "nullable" in schema and not isinstance(schema["nullable"], bool):
-        errors.append(f"{repo_relative(path)}: {label}.nullable must be boolean")
-    if "const" in schema and not isinstance(schema["const"], (str, int, float, bool)):
-        errors.append(f"{repo_relative(path)}: {label}.const must be a scalar")
-
-    extra_fields = sorted(set(schema) - allowed_fields)
-    if extra_fields:
-        errors.append(f"{repo_relative(path)}: {label} has unexpected field(s): {extra_fields}")
-
-    return errors
+    return [f"{repo_relative(path)}: {label} must be a type string, object, or single-item array"]
 
 
 def validate_api_context(path: Path, value: object) -> list[str]:

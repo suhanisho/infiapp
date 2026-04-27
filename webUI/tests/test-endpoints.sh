@@ -54,7 +54,7 @@ wait_for_messages_api() {
       --data '{"message":"ci smoke"}' \
       "http://127.0.0.1:3000/api/sample/messages" >"$STORE_RESPONSE"; then
       assert_contains "$STORE_RESPONSE" "ci smoke"
-      assert_contains "$STORE_RESPONSE" "\"action\":\"store_message\""
+      assert_contains "$STORE_RESPONSE" "\"stored\":true"
       break
     fi
 
@@ -69,7 +69,7 @@ wait_for_messages_api() {
   curl --fail --silent --show-error \
     "http://127.0.0.1:3000/api/sample/messages?limit=5" >"$LIST_RESPONSE"
   assert_contains "$LIST_RESPONSE" "ci smoke"
-  assert_contains "$LIST_RESPONSE" "\"action\":\"list_messages\""
+  assert_contains "$LIST_RESPONSE" "\"messages\""
 }
 
 setsid env \
