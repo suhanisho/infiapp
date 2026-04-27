@@ -31,10 +31,10 @@ jobs:
       - name: Validate agent specs
         run: python -m repo_tools validate-agents
 
-      - name: Run agent tests
+      - name: Run agent and shared utility tests
         run: python -m repo_tools test-agents
 
-      - name: Type check agents
+      - name: Type check agents and shared utilities
         run: python -m repo_tools typecheck-agents
 
       - name: Compile agent and repo tool Python

@@ -7,9 +7,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-AGENT_DIR = Path(__file__).resolve().parents[1]
-AGENTS_DIR = AGENT_DIR.parents[0]
-sys.path.insert(0, str(AGENTS_DIR / "shared_utils"))
+SHARED_UTILS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SHARED_UTILS_DIR))
 
 from generated.dynamodb import (  # noqa: E402
     SampleMessagesItem,

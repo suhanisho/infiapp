@@ -53,16 +53,25 @@ def typecheck_agents() -> None:
     shared_utils_dir = AGENTS_DIR / "shared_utils"
     config_file = REPO_ROOT / "pyproject.toml"
     cache_dir = REPO_ROOT / ".mypy_cache"
-    mypy_base_command = python_command(
+    mypy_base_args = [
         "-m",
         "mypy",
         "--config-file",
         str(config_file),
         "--cache-dir",
         str(cache_dir),
-        ".",
-    )
-    run(mypy_base_command, cwd=shared_utils_dir)
+    ]
+    run(python_command(*mypy_base_args, "response.py", "generated"), cwd=shared_utils_dir)
+    shared_utils_test_dir = shared_utils_dir / "test"
+    if shared_utils_test_dir.exists():
+        shared_utils_test_env = os.environ.copy()
+        shared_utils_test_env["MYPYPATH"] = os.pathsep.join(
+            [
+                str(shared_utils_dir),
+                shared_utils_test_env.get("MYPYPATH", ""),
+            ]
+        )
+        run(python_command(*mypy_base_args, "."), cwd=shared_utils_test_dir, env=shared_utils_test_env)
     for agent_dir in iter_agent_dirs():
         code_env = os.environ.copy()
         code_env["MYPYPATH"] = os.pathsep.join(
@@ -71,7 +80,7 @@ def typecheck_agents() -> None:
                 code_env.get("MYPYPATH", ""),
             ]
         )
-        run(mypy_base_command, cwd=agent_dir / "code", env=code_env)
+        run(python_command(*mypy_base_args, "."), cwd=agent_dir / "code", env=code_env)
         test_dir = agent_dir / "test"
         if test_dir.exists():
             test_env = os.environ.copy()
@@ -82,7 +91,7 @@ def typecheck_agents() -> None:
                     test_env.get("MYPYPATH", ""),
                 ]
             )
-            run(mypy_base_command, cwd=test_dir, env=test_env)
+            run(python_command(*mypy_base_args, "."), cwd=test_dir, env=test_env)
 
 
 def test_web() -> None:

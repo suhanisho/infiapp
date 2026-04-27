@@ -38,13 +38,13 @@ Validate generated files are current:
 python -m repo_tools codegen-check
 ```
 
-Run agent tests:
+Run agent and shared utility tests:
 
 ```bash
 python -m repo_tools test-agents
 ```
 
-Type check agents:
+Type check agents and shared utilities:
 
 ```bash
 python -m repo_tools typecheck-agents
