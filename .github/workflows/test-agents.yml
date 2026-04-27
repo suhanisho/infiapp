@@ -36,6 +36,3 @@ jobs:
 
       - name: Type check agents and shared utilities
         run: python -m repo_tools typecheck-agents
-
-      - name: Compile agent and repo tool Python
-        run: python -m repo_tools compile-python

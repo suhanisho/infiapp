@@ -68,12 +68,6 @@ Run WebUI screenshot tests:
 python -m repo_tools test-web-e2e
 ```
 
-Compile Python files:
-
-```bash
-python -m repo_tools compile-python
-```
-
 ## Generated Files
 
 Do not edit generated files by hand. Update specs or generator code, then run `python -m repo_tools codegen`.

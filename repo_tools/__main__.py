@@ -106,10 +106,6 @@ def test_web_e2e() -> None:
     run(npm_webui_command("run", "test:e2e"))
 
 
-def compile_python() -> None:
-    run(python_command("-m", "compileall", "repo_tools", "agents"))
-
-
 def check() -> None:
     validate()
     codegen_check()
@@ -130,7 +126,6 @@ COMMANDS = {
     "test-web": test_web,
     "build-web": build_web,
     "test-web-e2e": test_web_e2e,
-    "compile-python": compile_python,
     "check": check,
 }
 
