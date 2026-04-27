@@ -18,6 +18,37 @@ Inferred/defaulted fields:
 - The owning agent is inferred from the parent folder name.
 - Billing mode is hardcoded to `PAY_PER_REQUEST`.
 
+Example:
+
+```text
+dynamodb/sample_agent/sample_messages.json
+```
+
+```json
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "app_name",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "message_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "app_name": "String",
+    "message_id": "String",
+    "created_at": "String",
+    "message": "String",
+    "metadata": "Map",
+    "tags": "List"
+  }
+}
+```
+
+This creates a DynamoDB table named `sample_messages` owned by `sample_agent`.
+
 Supported attribute types:
 
 - `String`
