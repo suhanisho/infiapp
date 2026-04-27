@@ -140,8 +140,8 @@ Create the AWS secrets:
 Create the Vercel secrets:
 
 1. Create or choose the Vercel team that should own the WebUI project.
-2. In Vercel, open **Settings > Tokens**.
-3. Create a token for the account or team that owns the WebUI project. Copy the token immediately and add it to GitHub as `VERCEL_TOKEN`.
+2. In Vercel, open Personal **Settings > Tokens**.
+3. Create a token and choose the team that owns the app as the scope. Set Expiration to never. Copy the token and add it to GitHub as `VERCEL_TOKEN`.
 4. In Vercel, open the owning team's **Settings > General** page.
 5. Copy the **Team ID**, which starts with `team_`, and add it to GitHub as `VERCEL_TEAM_ID`.
 
