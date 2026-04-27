@@ -56,22 +56,9 @@ See [dynamodb/README.md](dynamodb/README.md) for the table spec format, supporte
 
 ## WebUI
 
-`webUI/` is a single Next.js App Router application. It is the user-facing web app for the repo.
+`webUI/` is a single Next.js App Router application. It can call external Lambda agents through generated helpers, uses generated agent mocks for local development, and should be tested with package tests, curl smoke checks, and Playwright screenshots.
 
-Conventions:
-
-- Use generated agent helpers from `webUI/src/lib/generated/agents.ts` when the WebUI calls external agents.
-- Use generated mocks from `webUI/src/lib/generated/mockAgents.ts` for local development and tests.
-- Keep API routes under `webUI/app/api/` thin; they should translate HTTP requests into generated agent-helper calls.
-- Add WebUI package tests for generated-client behavior and other non-visual logic.
-- Add curl smoke coverage for important API endpoints in `.github/workflows/test-webUI.yml`.
-- Add Playwright screenshot coverage for important user workflows, including phone-sized viewports.
-
-WebUI production agent access:
-
-- External agent calls use generated AWS Lambda clients.
-- Local development and tests use generated mocks.
-- The deploy workflow configures Vercel production environment variables for OIDC access automatically.
+See [webUI/README.md](webUI/README.md) for WebUI conventions, generated helper usage, local mock behavior, and test expectations.
 
 ## Repo Tools
 
