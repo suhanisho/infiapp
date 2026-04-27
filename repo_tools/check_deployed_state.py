@@ -36,6 +36,10 @@ def log_section(message: str) -> None:
 
 
 def run_json(command: list[str]) -> tuple[int, dict[str, Any]]:
+    if command and command[0] == "aws" and "--region" not in command:
+        region = os.environ.get("AWS_REGION")
+        if region:
+            command = ["aws", "--region", region, *command[1:]]
     print("+", " ".join(command), flush=True)
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:

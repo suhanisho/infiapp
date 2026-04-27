@@ -67,6 +67,7 @@ def run(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    command = with_aws_region(command)
     print("+", " ".join(redact_command(command)), flush=True)
     return subprocess.run(command, cwd=cwd, text=True, check=check, env=env)
 
@@ -85,7 +86,17 @@ def redact_command(command: list[str]) -> list[str]:
     return redacted
 
 
+def with_aws_region(command: list[str]) -> list[str]:
+    if command and command[0] == "aws" and "--region" not in command:
+        region = os.environ.get("AWS_REGION")
+        if region:
+            return ["aws", "--region", region, *command[1:]]
+    return command
+
+
 def aws_json(command: list[str]) -> tuple[int, dict[str, Any]]:
+    command = with_aws_region(command)
+    print("+", " ".join(redact_command(command)), flush=True)
     result = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return result.returncode, {}
