@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "test": "node --test tests/*.test.mjs",
+    "test:curl": "bash tests/test-endpoints.sh",
     "test:e2e": "playwright test",
-    "check": "npm run test && npm run build && npm run test:e2e"
+    "check": "npm run test && npm run build && npm run test:curl && npm run test:e2e"
   },
   "dependencies": {
     "@aws-sdk/client-lambda": "3.1024.0",

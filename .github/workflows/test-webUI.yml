@@ -43,35 +43,8 @@ jobs:
       - name: Install Playwright browser
         run: npm --prefix webUI exec playwright install --with-deps chromium
 
-      - name: Start WebUI
-        shell: bash
-        run: |
-          npm --prefix webUI run dev > /tmp/infiapp-webui.log 2>&1 &
-          echo "$!" > /tmp/infiapp-webui.pid
-
-      - name: Curl smoke test
-        shell: bash
-        run: |
-          for i in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:3000/api/sample \
-              -X POST \
-              -H 'content-type: application/json' \
-              --data '{"message":"ci smoke"}' | grep -q 'ci smoke'; then
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/infiapp-webui.log
-          exit 1
-
-      - name: Stop WebUI smoke server
-        if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/infiapp-webui.pid ]; then
-            kill "$(cat /tmp/infiapp-webui.pid)" || true
-          fi
-          fuser -k 3000/tcp || true
+      - name: Curl smoke tests
+        run: npm --prefix webUI run test:curl
 
       - name: Screenshot tests
         run: python -m repo_tools test-web-e2e

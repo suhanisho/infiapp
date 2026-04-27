@@ -12,8 +12,36 @@ Keep API routes under `webUI/app/api/` thin. They should translate HTTP requests
 
 ## Tests
 
-Add WebUI package tests for generated-client behavior and other non-visual logic.
+Install dependencies before running WebUI checks:
 
-Add curl smoke coverage for important API endpoints in `.github/workflows/test-webUI.yml`.
+```bash
+npm --prefix webUI ci
+```
 
-Add Playwright screenshot coverage for important user workflows, including phone-sized viewports.
+Run package tests for generated-client behavior and other non-visual logic:
+
+```bash
+npm --prefix webUI test
+```
+
+Build the Next.js app before curl smoke tests:
+
+```bash
+npm --prefix webUI run build
+```
+
+Run curl smoke tests for important API endpoints:
+
+```bash
+npm --prefix webUI run test:curl
+```
+
+Curl smoke coverage lives in `webUI/tests/test-endpoints.sh`. Keep endpoint assertions there instead of embedding curl logic in GitHub workflow YAML.
+
+Run Playwright screenshot tests for visible workflows, including phone-sized viewports:
+
+```bash
+npm --prefix webUI run test:e2e
+```
+
+The GitHub workflow `.github/workflows/test-webUI.yml` runs package tests, builds the app, runs the curl smoke script, and then runs screenshot tests.
