@@ -46,7 +46,7 @@ webUI/
 
 Agents are Python Lambda functions defined by folder-level specs. Each agent owns its code, tests, and any DynamoDB tables declared for it. Agents can be `internal` or `external`; external agents get generated WebUI clients.
 
-See `agents/README.md` for the required folder structure, `spec.json` fields, framework defaults, shared utilities, and test expectations.
+See [agents/README.md](agents/README.md) for the required folder structure, `spec.json` fields, framework defaults, shared utilities, and test expectations.
 
 ## DynamoDB
 
