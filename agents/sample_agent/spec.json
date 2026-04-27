@@ -2,6 +2,9 @@
   "name": "sample_agent",
   "description": "Starter external Lambda agent for the Infiapp demo app.",
   "connectivity": "external",
+  "memory_mb": 128,
+  "timeout_seconds": 30,
+  "ephemeral_storage_mb": 512,
   "required_dependencies": [
     "boto3"
   ]

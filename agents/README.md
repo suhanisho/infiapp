@@ -22,6 +22,9 @@ agents/<agent_name>/
   "name": "sample_agent",
   "description": "Stores and echoes sample messages for the starter app.",
   "connectivity": "external",
+  "memory_mb": 128,
+  "timeout_seconds": 30,
+  "ephemeral_storage_mb": 512,
   "required_dependencies": [
     "boto3"
   ]
@@ -33,6 +36,9 @@ Fields:
 - `name`: must match the agent folder name.
 - `description`: non-empty human-readable purpose.
 - `connectivity`: `internal` or `external`.
+- `memory_mb`: Lambda memory size in MB, from 128 through 10240.
+- `timeout_seconds`: Lambda timeout in seconds, from 1 through 900.
+- `ephemeral_storage_mb`: Lambda `/tmp` storage in MB, from 512 through 10240.
 - `required_dependencies`: package names used by the agent. Each name must resolve to an exact pinned requirement in root `pyproject.toml`.
 
 Framework defaults:

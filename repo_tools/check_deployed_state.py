@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from repo_tools.common import iter_agent_dirs, iter_table_paths, load_json
 from repo_tools.deploy import (
+    LAMBDA_HANDLER,
     VERCEL_AGENT_POLICY_NAME,
     VERCEL_AGENT_ROLE_NAME,
     VERCEL_MANAGED_ENV_KEYS,
@@ -69,9 +70,28 @@ def check_agents() -> list[str]:
     for agent_dir in iter_agent_dirs():
         spec = load_json(agent_dir / "spec.json")
         function_name = spec["name"]
-        code, _ = run_json(["aws", "lambda", "get-function", "--function-name", function_name])
+        code, data = run_json(["aws", "lambda", "get-function", "--function-name", function_name])
         if code != 0:
             errors.append(f"Lambda function missing or inaccessible: {function_name}")
+            continue
+        config = data.get("Configuration", {})
+        expected_values = {
+            "Runtime": "python3.11",
+            "Handler": LAMBDA_HANDLER,
+            "MemorySize": spec["memory_mb"],
+            "Timeout": spec["timeout_seconds"],
+        }
+        for field, expected in expected_values.items():
+            if config.get(field) != expected:
+                errors.append(
+                    f"{function_name}: {field} is {config.get(field)!r}, expected {expected!r}"
+                )
+        ephemeral_size = config.get("EphemeralStorage", {}).get("Size")
+        if ephemeral_size != spec["ephemeral_storage_mb"]:
+            errors.append(
+                f"{function_name}: ephemeral storage is {ephemeral_size!r}, "
+                f"expected {spec['ephemeral_storage_mb']!r}"
+            )
     return errors
 
 

@@ -323,6 +323,23 @@ def deploy_agents() -> None:
                         f"fileb://{zip_path}",
                     ]
                 )
+                run(["aws", "lambda", "wait", "function-updated-v2", "--function-name", function_name])
+                run(
+                    [
+                        "aws",
+                        "lambda",
+                        "update-function-configuration",
+                        "--function-name",
+                        function_name,
+                        "--memory-size",
+                        str(spec["memory_mb"]),
+                        "--timeout",
+                        str(spec["timeout_seconds"]),
+                        "--ephemeral-storage",
+                        f"Size={spec['ephemeral_storage_mb']}",
+                    ]
+                )
+                run(["aws", "lambda", "wait", "function-updated-v2", "--function-name", function_name])
             else:
                 run(
                     [
@@ -337,6 +354,12 @@ def deploy_agents() -> None:
                         role_arn,
                         "--handler",
                         LAMBDA_HANDLER,
+                        "--memory-size",
+                        str(spec["memory_mb"]),
+                        "--timeout",
+                        str(spec["timeout_seconds"]),
+                        "--ephemeral-storage",
+                        f"Size={spec['ephemeral_storage_mb']}",
                         "--zip-file",
                         f"fileb://{zip_path}",
                     ]

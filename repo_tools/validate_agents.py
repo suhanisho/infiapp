@@ -23,9 +23,15 @@ REQUIRED_FIELDS = {
     "name": str,
     "description": str,
     "connectivity": str,
+    "memory_mb": int,
+    "timeout_seconds": int,
+    "ephemeral_storage_mb": int,
     "required_dependencies": list,
 }
 REQUIRED_HANDLER_PATH = Path("code") / "handler.py"
+MEMORY_MB_RANGE = (128, 10_240)
+TIMEOUT_SECONDS_RANGE = (1, 900)
+EPHEMERAL_STORAGE_MB_RANGE = (512, 10_240)
 
 
 def defines_lambda_handler(handler_path: Path) -> bool:
@@ -80,6 +86,18 @@ def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[
         errors.append(
             f"{repo_relative(spec_path)}: connectivity must be one of {sorted(VALID_CONNECTIVITY)}"
         )
+
+    ranged_fields = {
+        "memory_mb": MEMORY_MB_RANGE,
+        "timeout_seconds": TIMEOUT_SECONDS_RANGE,
+        "ephemeral_storage_mb": EPHEMERAL_STORAGE_MB_RANGE,
+    }
+    for field, (minimum, maximum) in ranged_fields.items():
+        value = spec.get(field)
+        if isinstance(value, int) and not minimum <= value <= maximum:
+            errors.append(
+                f"{repo_relative(spec_path)}: {field} must be between {minimum} and {maximum}"
+            )
 
     handler_path = agent_dir / REQUIRED_HANDLER_PATH
     if not handler_path.exists():
