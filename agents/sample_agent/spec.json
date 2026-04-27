@@ -2,7 +2,6 @@
   "name": "sample_agent",
   "description": "Starter external Lambda agent for the Infiapp demo app.",
   "connectivity": "external",
-  "handler": "handler.lambda_handler",
   "required_dependencies": [
     "boto3"
   ]

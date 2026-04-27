@@ -41,7 +41,8 @@ class SampleAgentTest(unittest.TestCase):
         self.assertEqual(body["action"], "store_message")
         self.assertEqual(body["message"], "message stored")
         self.assertEqual(body["item"]["message"], "sample note")
-        self.assertEqual(body["agent"], "sample_agent")
+        self.assertNotIn("agent", body)
+        self.assertNotIn("mocked", body)
         self.assertFalse(body["stored"])
 
     def test_lambda_handler_accepts_function_url_body(self) -> None:

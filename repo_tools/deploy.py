@@ -44,6 +44,7 @@ VERCEL_MANAGED_ENV_KEYS = {
     "AWS_ROLE_ARN",
     "INFIAPP_AGENT_BACKEND_MODE",
 }
+LAMBDA_HANDLER = "handler.lambda_handler"
 
 
 def run(
@@ -335,7 +336,7 @@ def deploy_agents() -> None:
                         "--role",
                         role_arn,
                         "--handler",
-                        spec["handler"],
+                        LAMBDA_HANDLER,
                         "--zip-file",
                         f"fileb://{zip_path}",
                     ]

@@ -55,7 +55,6 @@ wait_for_messages_api() {
       "http://127.0.0.1:3000/api/sample/messages" >"$STORE_RESPONSE"; then
       assert_contains "$STORE_RESPONSE" "ci smoke"
       assert_contains "$STORE_RESPONSE" "\"action\":\"store_message\""
-      assert_contains "$STORE_RESPONSE" "\"mocked\":true"
       break
     fi
 

@@ -15,8 +15,6 @@ export type AgentResponse = {
   item?: AgentMessage;
   messages?: AgentMessage[];
   nextKey?: Record<string, unknown> | null;
-  agent: string;
-  mocked: boolean;
   stored?: boolean;
 };
 
@@ -34,8 +32,6 @@ export async function mockCallSampleAgent(payload: AgentRequest = {}): Promise<A
       action: "list_messages",
       messages,
       nextKey: newOffset < mockSampleAgentMessages.length ? { offset: newOffset } : null,
-      agent: "sample_agent",
-      mocked: true,
     };
   }
 
@@ -54,8 +50,6 @@ export async function mockCallSampleAgent(payload: AgentRequest = {}): Promise<A
     action: "store_message",
     message: "message stored",
     item,
-    agent: "sample_agent",
-    mocked: true,
     stored: true,
   };
 }

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -18,14 +19,24 @@ from repo_tools.python_dependencies import (
 
 VALID_CONNECTIVITY = {"internal", "external"}
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-HANDLER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$")
 REQUIRED_FIELDS = {
     "name": str,
     "description": str,
     "connectivity": str,
-    "handler": str,
     "required_dependencies": list,
 }
+REQUIRED_HANDLER_PATH = Path("code") / "handler.py"
+
+
+def defines_lambda_handler(handler_path: Path) -> bool:
+    try:
+        tree = ast.parse(handler_path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    return any(
+        isinstance(node, ast.FunctionDef) and node.name == "lambda_handler"
+        for node in tree.body
+    )
 
 
 def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[str]:
@@ -70,14 +81,13 @@ def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[
             f"{repo_relative(spec_path)}: connectivity must be one of {sorted(VALID_CONNECTIVITY)}"
         )
 
-    handler = spec.get("handler")
-    if isinstance(handler, str):
-        if not HANDLER_RE.fullmatch(handler):
-            errors.append(f"{repo_relative(spec_path)}: handler must look like module.function")
-        module_name = handler.split(".", 1)[0]
-        handler_path = agent_dir / "code" / f"{module_name}.py"
-        if not handler_path.exists():
-            errors.append(f"{repo_relative(spec_path)}: handler module {handler_path} is missing")
+    handler_path = agent_dir / REQUIRED_HANDLER_PATH
+    if not handler_path.exists():
+        errors.append(
+            f"{repo_relative(handler_path)} must exist and define lambda_handler"
+        )
+    elif not defines_lambda_handler(handler_path):
+        errors.append(f"{repo_relative(handler_path)} must define lambda_handler")
 
     errors.extend(
         f"{repo_relative(spec_path)}: {error}"

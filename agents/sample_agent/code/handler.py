@@ -108,26 +108,22 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
             200,
             {
                 "action": "list_messages",
-                "agent": "sample_agent",
-                "mocked": False,
                 **page,
             },
         )
 
     if action != "store_message":
-        return json_response(400, {"error": f"unsupported action: {action}", "agent": "sample_agent"})
+        return json_response(400, {"error": f"unsupported action: {action}"})
 
     message = str(payload.get("message", "")).strip()
     if not message:
-        return json_response(400, {"error": "message is required", "agent": "sample_agent"})
+        return json_response(400, {"error": "message is required"})
 
     store_result = _store_message(message)
     body = {
         "action": "store_message",
         "message": "message stored",
         "item": _format_message(store_result.item),
-        "agent": "sample_agent",
-        "mocked": False,
         "stored": store_result.stored,
     }
     return json_response(200, body)
