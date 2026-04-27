@@ -76,6 +76,8 @@ Deployment packages only the pinned dependencies named by each agent.
 
 Put agent tests under `test/` with names matching `test_*.py`.
 
+Agent unit tests must mock every external dependency. Do not call live AWS services, DynamoDB tables, Lambda functions, HTTP APIs, Vercel, databases, queues, or other networked systems from unit tests. Use fakes, stubs, dependency injection, or `unittest.mock` so tests only verify the agent's code and generated helper contracts.
+
 Run all agent checks:
 
 ```bash
