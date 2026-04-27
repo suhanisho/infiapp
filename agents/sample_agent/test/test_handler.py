@@ -23,6 +23,7 @@ class SampleAgentTest(unittest.TestCase):
         body = json.loads(response["body"])
         self.assertEqual(body["message"], "lambda was called: sample note")
         self.assertEqual(body["lastMessage"], "sample note")
+        self.assertEqual(body["messageSlug"], "sample-note")
         self.assertEqual(body["agent"], "sample_agent")
         self.assertEqual(body["table"], "sample_messages")
         self.assertFalse(body["stored"])

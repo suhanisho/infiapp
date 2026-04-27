@@ -22,7 +22,11 @@ agents/<agent_name>/
   "name": "sample_agent",
   "description": "Stores and echoes sample messages for the starter app.",
   "connectivity": "external",
-  "handler": "handler.lambda_handler"
+  "handler": "handler.lambda_handler",
+  "required_dependencies": [
+    "boto3",
+    "python-slugify"
+  ]
 }
 ```
 
@@ -32,6 +36,7 @@ Fields:
 - `description`: non-empty human-readable purpose.
 - `connectivity`: `internal` or `external`.
 - `handler`: Python module and function under `code/`, using `module.function` format.
+- `required_dependencies`: package names used by the agent. Each name must resolve to an exact pinned requirement in root `pyproject.toml`.
 
 Framework defaults:
 
@@ -54,6 +59,18 @@ Generated shared utilities live under `agents/shared_utils/generated/`. Do not e
 ```bash
 python -m repo_tools codegen
 ```
+
+## Dependencies
+
+Declare Python package needs in `required_dependencies` as package names only, such as `python-slugify`. Add the exact pinned version once in root `pyproject.toml` under `project.dependencies`.
+
+Install Python dependencies from an activated venv with:
+
+```bash
+python -m repo_tools install-python
+```
+
+Deployment packages only the pinned dependencies named by each agent.
 
 ## Tests
 

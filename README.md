@@ -23,7 +23,9 @@ dynamodb/
   README.md                  DynamoDB table spec
   sample_agent/
     sample_messages.json     Demo message table owned by sample_agent
+pyproject.toml               Repo-wide pinned Python dependency manifest
 repo_tools/
+  python_dependencies.py     Resolves pinned Python dependencies from pyproject.toml
   codegen.py                 Generates DynamoDB helpers and WebUI agent clients
   validate_agents.py         Validates Lambda agent specs
   validate_dynamodb.py       Validates table specs and key compatibility
@@ -132,6 +134,12 @@ Validate specs:
 python -m repo_tools validate
 ```
 
+Install Python dependencies:
+
+```bash
+python -m repo_tools install-python
+```
+
 Run all tests:
 
 ```bash
@@ -175,7 +183,13 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-The current framework tools use only the Python standard library, so there are no Python packages to install yet. Keep the venv anyway so future agent dependencies have a predictable home.
+Install Python dependencies:
+
+```bash
+python -m repo_tools install-python
+```
+
+Python dependencies are pinned in root `pyproject.toml`. Agent specs list dependency names in `required_dependencies`, and validation fails if an agent names a dependency that is not pinned there.
 
 Install Node dependencies:
 
@@ -273,6 +287,8 @@ When adding an agent:
 - Add `agents/<agent_name>/code/handler.py`.
 - Add focused unit tests in `agents/<agent_name>/test/`.
 - Add DynamoDB table specs under `dynamodb/<agent_name>/` when the agent owns data.
+- Add package names to `required_dependencies` when the agent imports external Python libraries.
+- Pin every required Python dependency in root `pyproject.toml`.
 - Run `python -m repo_tools codegen` after adding external agents or DynamoDB specs.
 
 When changing DynamoDB:

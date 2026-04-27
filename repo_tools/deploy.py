@@ -16,7 +16,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from repo_tools.common import AGENTS_DIR, REPO_ROOT, WEBUI_DIR, iter_agent_dirs, iter_table_paths, load_json
+from repo_tools.common import (
+    AGENTS_DIR,
+    REPO_ROOT,
+    WEBUI_DIR,
+    iter_agent_dirs,
+    iter_table_paths,
+    load_json,
+)
+from repo_tools.python_dependencies import resolve_dependency_names
 
 AWS_ATTRIBUTE_TYPES = {
     "String": "S",
@@ -32,7 +40,7 @@ def run(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    print("+", " ".join(command))
+    print("+", " ".join(command), flush=True)
     return subprocess.run(command, cwd=cwd, text=True, check=check, env=env)
 
 
@@ -167,13 +175,53 @@ def ensure_agent_role(agent_name: str) -> str:
     return role_data["Role"]["Arn"]
 
 
+def copy_tree_contents(source_root: Path, target_root: Path) -> None:
+    for file_path in source_root.rglob("*"):
+        if file_path.is_file() and "__pycache__" not in file_path.parts:
+            relative_path = file_path.relative_to(source_root)
+            target_path = target_root / relative_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file_path, target_path)
+
+
+def zip_directory(source_root: Path, output_path: Path) -> None:
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for file_path in source_root.rglob("*"):
+            if file_path.is_file() and "__pycache__" not in file_path.parts:
+                archive.write(file_path, file_path.relative_to(source_root))
+
+
+def install_agent_dependencies(agent_dir: Path, build_dir: Path) -> None:
+    spec = load_json(agent_dir / "spec.json")
+    requirements = resolve_dependency_names(spec["required_dependencies"])
+    if not requirements:
+        return
+
+    requirements_path = build_dir / "requirements.txt"
+    requirements_path.write_text("\n".join(requirements) + "\n")
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(build_dir),
+            "--requirement",
+            str(requirements_path),
+        ]
+    )
+    requirements_path.unlink()
+
+
 def zip_agent(agent_dir: Path, output_path: Path) -> None:
     shared_utils = AGENTS_DIR / "shared_utils"
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for source_root in (agent_dir / "code", shared_utils):
-            for file_path in source_root.rglob("*"):
-                if file_path.is_file() and "__pycache__" not in file_path.parts:
-                    archive.write(file_path, file_path.relative_to(source_root))
+    with tempfile.TemporaryDirectory() as tmp:
+        build_dir = Path(tmp)
+        install_agent_dependencies(agent_dir, build_dir)
+        copy_tree_contents(agent_dir / "code", build_dir)
+        copy_tree_contents(shared_utils, build_dir)
+        zip_directory(build_dir, output_path)
 
 
 def deploy_agents() -> None:

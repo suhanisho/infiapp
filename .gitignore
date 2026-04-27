@@ -6,6 +6,7 @@ coverage/
 .env
 .env.local
 .venv/
+*.egg-info/
 .vercel/
 .pytest_cache/
 __pycache__/

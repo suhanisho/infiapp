@@ -27,6 +27,10 @@ def validate() -> None:
     validate_db()
 
 
+def install_python() -> None:
+    run(python_command("-m", "pip", "install", "-e", ".[dev]"))
+
+
 def validate_agents() -> None:
     run(python_command("-m", "repo_tools.validate_agents"))
 
@@ -72,6 +76,7 @@ def check() -> None:
 
 
 COMMANDS = {
+    "install-python": install_python,
     "validate": validate,
     "validate-agents": validate_agents,
     "validate-db": validate_db,

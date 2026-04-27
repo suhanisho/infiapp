@@ -11,6 +11,10 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from repo_tools.common import iter_agent_dirs, load_json, repo_relative
+from repo_tools.python_dependencies import (
+    load_pinned_python_dependencies,
+    validate_dependency_names,
+)
 
 VALID_CONNECTIVITY = {"internal", "external"}
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -20,10 +24,11 @@ REQUIRED_FIELDS = {
     "description": str,
     "connectivity": str,
     "handler": str,
+    "required_dependencies": list,
 }
 
 
-def validate_spec(agent_dir: Path) -> list[str]:
+def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[str]:
     errors: list[str] = []
     spec_path = agent_dir / "spec.json"
 
@@ -74,6 +79,15 @@ def validate_spec(agent_dir: Path) -> list[str]:
         if not handler_path.exists():
             errors.append(f"{repo_relative(spec_path)}: handler module {handler_path} is missing")
 
+    errors.extend(
+        f"{repo_relative(spec_path)}: {error}"
+        for error in validate_dependency_names(
+            spec.get("required_dependencies"),
+            pinned_dependencies=pinned_dependencies,
+            label="required_dependencies",
+        )
+    )
+
     if not (agent_dir / "code").is_dir():
         errors.append(f"{repo_relative(agent_dir / 'code')} must exist")
     if not (agent_dir / "test").is_dir():
@@ -93,12 +107,18 @@ def load_external_agents() -> list[dict[str, Any]]:
 
 def main() -> int:
     errors: list[str] = []
+    try:
+        pinned_dependencies = load_pinned_python_dependencies()
+    except ValueError as exc:
+        pinned_dependencies = {}
+        errors.append(str(exc))
+
     agent_dirs = iter_agent_dirs()
     if not agent_dirs:
         errors.append("agents/: at least one agent is required")
 
     for agent_dir in agent_dirs:
-        errors.extend(validate_spec(agent_dir))
+        errors.extend(validate_spec(agent_dir, pinned_dependencies))
 
     if errors:
         print("Agent spec validation failed:\n")
