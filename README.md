@@ -167,9 +167,6 @@ Required local tools:
   npm install -g npm@10
   ```
 
-- AWS CLI v2 for deploy and deployed-state verification.
-- Vercel CLI, invoked through `npx vercel`, for WebUI deployment.
-
 Create a Python virtual environment:
 
 ```bash
@@ -241,13 +238,13 @@ The AWS credentials must be allowed to manage:
 
 The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. Agent specs do not contain IAM policy JSON.
 
-Deploy manually from GitHub Actions after changes land on `main`. The deploy workflow runs:
+Deploy manually from GitHub Actions after changes land on `main`. Do not deploy from a local machine. The deploy workflow runs:
 
 ```bash
 python -m repo_tools.deploy
 ```
 
-The deploy tool is deliberately small and auditable. It creates or updates DynamoDB tables, packages Lambda agents, and deploys the WebUI with Vercel.
+The deploy tool is deliberately small and auditable. The GitHub Actions workflow uses it to create or update DynamoDB tables, package Lambda agents, and deploy the WebUI with Vercel.
 
 Required runtime environment variables:
 
