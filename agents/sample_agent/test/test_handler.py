@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import sys
 import unittest
 from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
 AGENTS_DIR = AGENT_DIR.parents[0]
-sys.path.insert(0, str(AGENT_DIR / "code"))
 sys.path.insert(0, str(AGENTS_DIR / "shared_utils"))
 
-from handler import lambda_handler, local_call  # noqa: E402
+
+def load_handler_module() -> ModuleType:
+    module_path = AGENT_DIR / "code" / "handler.py"
+    spec = spec_from_file_location("sample_agent_handler", module_path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+handler_module = load_handler_module()
+lambda_handler = cast(
+    Callable[..., dict[str, Any]],
+    getattr(handler_module, "lambda_handler"),
+)
+local_call = cast(Callable[[str], dict[str, Any]], getattr(handler_module, "local_call"))
 
 
 class SampleAgentTest(unittest.TestCase):
