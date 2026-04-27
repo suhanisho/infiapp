@@ -243,12 +243,36 @@ Required GitHub secrets:
 - `VERCEL_TOKEN`
 - `VERCEL_TEAM_ID`
 
-The AWS credentials must be allowed to manage:
+Create the AWS secrets:
+
+1. Use a dedicated AWS account for this app if possible.
+2. In the AWS Console, go to **IAM > Users > Create user**.
+3. Name the user `infiapp-control-plane`.
+4. Choose **Attach policies directly** and attach the AWS managed policy `AdministratorAccess`.
+5. Open the new user, go to **Security credentials > Create access key**.
+6. Choose **Third-party service** as the use case.
+7. Copy the **Access key ID** into GitHub as `AWS_ACCESS_KEY_ID`.
+8. Copy the **Secret access key** into GitHub as `AWS_SECRET_ACCESS_KEY`.
+9. Set `AWS_REGION` to the AWS region you want to deploy into, for example `us-east-1`.
+
+For initial setup, the AWS keys are intentionally admin keys in an isolated account. The deploy workflow needs to create and update:
 
 - DynamoDB tables.
 - Lambda functions and Lambda Function URLs.
 - IAM roles and inline role policies for generated agent roles.
 - CloudWatch Logs permissions attached to generated Lambda roles.
+
+Create the Vercel secrets:
+
+1. Create or choose the Vercel team that should own the WebUI project.
+2. In Vercel, open **Settings > Tokens**.
+3. Create a token for the account or team that owns the WebUI project. Copy the token immediately and add it to GitHub as `VERCEL_TOKEN`.
+4. In Vercel, open the owning team's **Settings > General** page.
+5. Copy the **Team ID**, which starts with `team_`, and add it to GitHub as `VERCEL_TEAM_ID`.
+
+Do not install the Vercel GitHub app for this repo. Infiapp deploys the WebUI from the GitHub Actions deploy workflow.
+
+Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**. This repo does not require `AWS_ACCOUNT_ID`, `VERCEL_ORG_ID`, or `VERCEL_PROJECT_ID`; the AWS account id is read from the configured AWS credentials and Vercel is configured with `VERCEL_TOKEN` plus `VERCEL_TEAM_ID`.
 
 The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. Agent specs do not contain IAM policy JSON.
 
