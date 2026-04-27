@@ -12,7 +12,7 @@ Conventions for coding agents:
 - Run `python -m pip install ".[dev]"` after changing Python dependencies.
 - Do not manually edit files under generated folders; run `python -m repo_tools codegen`.
 - Run `python -m repo_tools typecheck-agents` when changing Python agents or shared utilities.
-- Run `python -m repo_tools check` before considering the work complete.
+- Run targeted repo tool commands for the files and behavior you changed before considering the work complete.
 
 When adding an agent:
 

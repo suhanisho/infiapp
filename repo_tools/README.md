@@ -8,12 +8,6 @@ source .venv/bin/activate
 
 ## Commands
 
-Run all repo checks:
-
-```bash
-python -m repo_tools check
-```
-
 Install Python dependencies from `pyproject.toml`, including the `dev` extra:
 
 ```bash
@@ -67,6 +61,8 @@ Run WebUI screenshot tests:
 ```bash
 python -m repo_tools test-web-e2e
 ```
+
+Run targeted commands for the files and behavior you changed instead of using one aggregate repo check.
 
 ## Generated Files
 
