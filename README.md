@@ -130,6 +130,12 @@ Install Node dependencies:
 npm --prefix webUI install
 ```
 
+Install the Playwright Chromium browser for local WebUI E2E and screenshot tests:
+
+```bash
+npm --prefix webUI exec playwright install chromium
+```
+
 Run the WebUI against generated agent mocks:
 
 ```bash
