@@ -31,7 +31,12 @@ AWS_ATTRIBUTE_TYPES = {
 }
 
 
+def log_section(message: str) -> None:
+    print(f"\n==> {message}", flush=True)
+
+
 def run_json(command: list[str]) -> tuple[int, dict[str, Any]]:
+    print("+", " ".join(command), flush=True)
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return result.returncode, {}
@@ -39,9 +44,13 @@ def run_json(command: list[str]) -> tuple[int, dict[str, Any]]:
 
 
 def check_tables() -> list[str]:
+    table_paths = iter_table_paths()
+    log_section(f"Verifying DynamoDB tables ({len(table_paths)} spec(s))")
     errors: list[str] = []
-    for path in iter_table_paths():
+    for path in table_paths:
         table = load_table_spec(path)
+        table_errors: list[str] = []
+        print(f"Checking DynamoDB table: {table['table_name']} ({path})", flush=True)
         code, data = run_json(["aws", "dynamodb", "describe-table", "--table-name", table["table_name"]])
         if code != 0:
             errors.append(f"DynamoDB table missing or inaccessible: {table['table_name']}")
@@ -58,18 +67,26 @@ def check_tables() -> list[str]:
         if expected_sk:
             expected_schema.append({"AttributeName": expected_sk["name"], "KeyType": "RANGE"})
         if key_schema != expected_schema:
-            errors.append(f"{table['table_name']}: key schema differs from repo definition")
+            table_errors.append(f"{table['table_name']}: key schema differs from repo definition")
         for key in (expected_pk, expected_sk):
             if key and attr_defs.get(key["name"]) != AWS_ATTRIBUTE_TYPES[key["type"]]:
-                errors.append(f"{table['table_name']}: key attribute {key['name']} type differs")
+                table_errors.append(f"{table['table_name']}: key attribute {key['name']} type differs")
+        if table_errors:
+            errors.extend(table_errors)
+        else:
+            print(f"DynamoDB table matches repo definition: {table['table_name']}", flush=True)
     return errors
 
 
 def check_agents() -> list[str]:
+    agent_dirs = iter_agent_dirs()
+    log_section(f"Verifying Lambda agents ({len(agent_dirs)} spec(s))")
     errors: list[str] = []
-    for agent_dir in iter_agent_dirs():
+    for agent_dir in agent_dirs:
         spec = load_json(agent_dir / "spec.json")
         function_name = agent_dir.name
+        agent_errors: list[str] = []
+        print(f"Checking Lambda function: {function_name}", flush=True)
         code, data = run_json(["aws", "lambda", "get-function", "--function-name", function_name])
         if code != 0:
             errors.append(f"Lambda function missing or inaccessible: {function_name}")
@@ -83,19 +100,24 @@ def check_agents() -> list[str]:
         }
         for field, expected in expected_values.items():
             if config.get(field) != expected:
-                errors.append(
+                agent_errors.append(
                     f"{function_name}: {field} is {config.get(field)!r}, expected {expected!r}"
                 )
         ephemeral_size = config.get("EphemeralStorage", {}).get("Size")
         if ephemeral_size != spec["ephemeral_storage_mb"]:
-            errors.append(
+            agent_errors.append(
                 f"{function_name}: ephemeral storage is {ephemeral_size!r}, "
                 f"expected {spec['ephemeral_storage_mb']!r}"
             )
+        if agent_errors:
+            errors.extend(agent_errors)
+        else:
+            print(f"Lambda function matches repo definition: {function_name}", flush=True)
     return errors
 
 
 def check_vercel_oidc_access() -> list[str]:
+    log_section("Verifying Vercel OIDC access")
     errors: list[str] = []
     external_agents: list[str] = []
     for agent_dir in iter_agent_dirs():
@@ -103,7 +125,9 @@ def check_vercel_oidc_access() -> list[str]:
         if spec["connectivity"] == "external":
             external_agents.append(agent_dir.name)
     if not external_agents:
+        print("No external agents found; skipping Vercel OIDC verification.", flush=True)
         return errors
+    print(f"External agents requiring Vercel invoke access: {', '.join(sorted(external_agents))}", flush=True)
 
     region = os.environ.get("AWS_REGION", "")
     vercel_token = os.environ.get("VERCEL_TOKEN", "")
@@ -118,6 +142,7 @@ def check_vercel_oidc_access() -> list[str]:
         return errors
 
     account_id = get_aws_account_id()
+    print(f"Checking Vercel IAM role: {VERCEL_AGENT_ROLE_NAME}", flush=True)
     role_code, role_data = run_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
     if role_code != 0:
         errors.append(f"Vercel OIDC role missing or inaccessible: {VERCEL_AGENT_ROLE_NAME}")
@@ -137,6 +162,7 @@ def check_vercel_oidc_access() -> list[str]:
     if policy_code != 0:
         errors.append(f"Vercel OIDC role policy missing: {VERCEL_AGENT_POLICY_NAME}")
     else:
+        print(f"Checking Vercel invoke policy: {VERCEL_AGENT_POLICY_NAME}", flush=True)
         expected_policy = build_vercel_invoke_policy(account_id, region)
         if policy_data.get("PolicyDocument") != expected_policy:
             errors.append("Vercel OIDC invoke policy differs from repo definition")
@@ -149,6 +175,7 @@ def check_vercel_oidc_access() -> list[str]:
     }
     envs = list_vercel_project_envs(vercel_token, vercel_team_id)
     for key, expected_value in expected_env.items():
+        print(f"Checking Vercel production env var: {key}", flush=True)
         matching_envs = [
             env
             for env in envs
@@ -171,6 +198,8 @@ def check_vercel_oidc_access() -> list[str]:
     )
     if unexpected:
         errors.append(f"Unexpected managed Vercel env var(s): {unexpected}")
+    if not errors:
+        print("Vercel OIDC access matches repo definition.", flush=True)
 
     return errors
 

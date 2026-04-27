@@ -14,6 +14,7 @@ from repo_tools.common import AGENTS_DIR, REPO_ROOT, iter_agent_dirs
 
 
 def run(command: Sequence[str], *, cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
+    print(f"+ cwd={cwd} {' '.join(command)}", flush=True)
     subprocess.run(list(command), cwd=cwd, check=True, env=env)
 
 
@@ -81,26 +82,32 @@ def rename_app(app_name: str, app_title: str | None = None) -> None:
 
 
 def validate_agents() -> None:
+    print("==> Validating agent specs", flush=True)
     run(python_command("-m", "repo_tools.validate_agents"))
 
 
 def validate_db() -> None:
+    print("==> Validating DynamoDB specs", flush=True)
     run(python_command("-m", "repo_tools.validate_dynamodb"))
 
 
 def codegen() -> None:
+    print("==> Regenerating generated framework files", flush=True)
     run(python_command("-m", "repo_tools.codegen"))
 
 
 def codegen_check() -> None:
+    print("==> Checking generated framework files are current", flush=True)
     run(python_command("-m", "repo_tools.codegen", "--check"))
 
 
 def test_agents() -> None:
+    print("==> Running agent and shared utility tests", flush=True)
     run(python_command("-m", "unittest", "discover", "-s", "agents", "-p", "test_*.py"))
 
 
 def typecheck_agents() -> None:
+    print("==> Type checking shared utilities", flush=True)
     shared_utils_dir = AGENTS_DIR / "shared_utils"
     config_file = REPO_ROOT / "pyproject.toml"
     cache_dir = REPO_ROOT / ".mypy_cache"
@@ -115,6 +122,7 @@ def typecheck_agents() -> None:
     run(python_command(*mypy_base_args, "response.py", "generated"), cwd=shared_utils_dir)
     shared_utils_test_dir = shared_utils_dir / "test"
     if shared_utils_test_dir.exists():
+        print("==> Type checking shared utility tests", flush=True)
         shared_utils_test_env = os.environ.copy()
         shared_utils_test_env["MYPYPATH"] = os.pathsep.join(
             [
@@ -124,6 +132,7 @@ def typecheck_agents() -> None:
         )
         run(python_command(*mypy_base_args, "."), cwd=shared_utils_test_dir, env=shared_utils_test_env)
     for agent_dir in iter_agent_dirs():
+        print(f"==> Type checking agent code: {agent_dir.name}", flush=True)
         code_env = os.environ.copy()
         code_env["MYPYPATH"] = os.pathsep.join(
             [
@@ -134,6 +143,7 @@ def typecheck_agents() -> None:
         run(python_command(*mypy_base_args, "."), cwd=agent_dir / "code", env=code_env)
         test_dir = agent_dir / "test"
         if test_dir.exists():
+            print(f"==> Type checking agent tests: {agent_dir.name}", flush=True)
             test_env = os.environ.copy()
             test_env["MYPYPATH"] = os.pathsep.join(
                 [
@@ -146,10 +156,12 @@ def typecheck_agents() -> None:
 
 
 def build_web() -> None:
+    print("==> Building WebUI", flush=True)
     run(npm_webui_command("run", "build"))
 
 
 def test_web_e2e() -> None:
+    print("==> Running WebUI Playwright E2E and screenshot tests", flush=True)
     run(npm_webui_command("run", "test:e2e"))
 
 

@@ -28,16 +28,41 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          aws --version
+          echo "::endgroup::"
+
       - name: Install Python dependencies
-        run: python -m pip install ".[dev]"
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
+      - name: Log Node versions
+        run: |
+          echo "::group::Node versions"
+          node --version
+          npm --version
+          echo "::endgroup::"
+
       - name: Install WebUI dependencies
-        run: npm --prefix webUI ci
+        run: |
+          echo "::group::Install WebUI dependencies"
+          npm --prefix webUI ci
+          echo "::endgroup::"
 
       - name: Deploy
-        run: python -m repo_tools.deploy
+        run: |
+          echo "::group::Deploy repo definition"
+          python -m repo_tools.deploy
+          echo "::endgroup::"

@@ -25,14 +25,34 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          echo "::endgroup::"
+
       - name: Install Python dependencies
-        run: python -m pip install ".[dev]"
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
 
       - name: Validate agent specs
-        run: python -m repo_tools validate-agents
+        run: |
+          echo "::group::Validate agent specs"
+          python -m repo_tools validate-agents
+          echo "::endgroup::"
 
       - name: Run agent and shared utility tests
-        run: python -m repo_tools test-agents
+        run: |
+          echo "::group::Run agent and shared utility tests"
+          python -m repo_tools test-agents
+          echo "::endgroup::"
 
       - name: Type check agents and shared utilities
-        run: python -m repo_tools typecheck-agents
+        run: |
+          echo "::group::Type check agents and shared utilities"
+          python -m repo_tools typecheck-agents
+          echo "::endgroup::"

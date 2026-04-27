@@ -48,6 +48,10 @@ VERCEL_MANAGED_ENV_KEYS = {
 LAMBDA_HANDLER = "handler.lambda_handler"
 
 
+def log_section(message: str) -> None:
+    print(f"\n==> {message}", flush=True)
+
+
 def vercel_project_path() -> str:
     return f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}"
 
@@ -129,6 +133,7 @@ def vercel_request_json(
 
 
 def get_aws_account_id() -> str:
+    print("Checking AWS caller identity.", flush=True)
     code, data = aws_json(["aws", "sts", "get-caller-identity"])
     account_id = data.get("Account")
     if code != 0 or not isinstance(account_id, str):
@@ -154,12 +159,15 @@ def external_agent_names() -> list[str]:
 
 
 def deploy_tables() -> None:
-    for path in iter_table_paths():
+    table_paths = iter_table_paths()
+    log_section(f"Deploying DynamoDB tables ({len(table_paths)} spec(s))")
+    for path in table_paths:
         table = load_table_spec(path)
         table_name = table["table_name"]
+        print(f"Processing DynamoDB table: {table_name} ({path})", flush=True)
         code, _ = aws_json(["aws", "dynamodb", "describe-table", "--table-name", table_name])
         if code == 0:
-            print(f"DynamoDB table exists: {table_name}")
+            print(f"DynamoDB table exists: {table_name}", flush=True)
             continue
 
         pk = table["primary_key"]["partition_key"]
@@ -198,8 +206,10 @@ def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
 def ensure_agent_role(agent_name: str) -> str:
     account_id = get_aws_account_id()
     role_name = f"infiapp-{agent_name}-lambda-role"
+    print(f"Ensuring Lambda IAM role for {agent_name}: {role_name}", flush=True)
     role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", role_name])
     if role_code != 0:
+        print(f"Creating Lambda IAM role: {role_name}", flush=True)
         assume_role_policy = {
             "Version": "2012-10-17",
             "Statement": [
@@ -227,6 +237,10 @@ def ensure_agent_role(agent_name: str) -> str:
         time.sleep(8)
 
     owned_tables = tables_for_agent(agent_name)
+    print(
+        f"Writing IAM policy for {role_name}; owned table count: {len(owned_tables)}",
+        flush=True,
+    )
     table_arns = [
         f"arn:aws:dynamodb:{os.environ['AWS_REGION']}:{account_id}:table/{table['table_name']}"
         for table in owned_tables
@@ -290,8 +304,13 @@ def install_agent_dependencies(agent_dir: Path, build_dir: Path) -> None:
     spec = load_json(agent_dir / "spec.json")
     requirements = resolve_dependency_names(spec["required_dependencies"])
     if not requirements:
+        print(f"Agent {agent_dir.name} has no external Python dependencies.", flush=True)
         return
 
+    print(
+        f"Installing Python dependencies for {agent_dir.name}: {', '.join(requirements)}",
+        flush=True,
+    )
     requirements_path = build_dir / "requirements.txt"
     requirements_path.write_text("\n".join(requirements) + "\n")
     run(
@@ -310,6 +329,7 @@ def install_agent_dependencies(agent_dir: Path, build_dir: Path) -> None:
 
 
 def zip_agent(agent_dir: Path, output_path: Path) -> None:
+    print(f"Packaging agent {agent_dir.name} into {output_path}", flush=True)
     shared_utils = AGENTS_DIR / "shared_utils"
     with tempfile.TemporaryDirectory() as tmp:
         build_dir = Path(tmp)
@@ -320,16 +340,20 @@ def zip_agent(agent_dir: Path, output_path: Path) -> None:
 
 
 def deploy_agents() -> None:
+    agent_dirs = iter_agent_dirs()
+    log_section(f"Deploying Lambda agents ({len(agent_dirs)} spec(s))")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        for agent_dir in iter_agent_dirs():
+        for agent_dir in agent_dirs:
             spec = load_json(agent_dir / "spec.json")
             function_name = agent_dir.name
+            print(f"Processing Lambda agent: {function_name}", flush=True)
             role_arn = ensure_agent_role(function_name)
             zip_path = tmp_dir / f"{function_name}.zip"
             zip_agent(agent_dir, zip_path)
             code, _ = aws_json(["aws", "lambda", "get-function", "--function-name", function_name])
             if code == 0:
+                print(f"Updating existing Lambda function: {function_name}", flush=True)
                 run(
                     [
                         "aws",
@@ -359,6 +383,7 @@ def deploy_agents() -> None:
                 )
                 run(["aws", "lambda", "wait", "function-updated-v2", "--function-name", function_name])
             else:
+                print(f"Creating Lambda function: {function_name}", flush=True)
                 run(
                     [
                         "aws",
@@ -400,6 +425,7 @@ def deploy_agents() -> None:
 
 
 def get_vercel_team_slug(vercel_token: str, vercel_team_id: str) -> str:
+    print("Fetching Vercel team metadata.", flush=True)
     team = vercel_request_json(
         method="GET",
         path=f"/v2/teams/{urllib.parse.quote(vercel_team_id)}",
@@ -427,6 +453,7 @@ def build_vercel_oidc_provider_arn(account_id: str, team_slug: str) -> str:
 
 
 def ensure_vercel_oidc_provider(account_id: str, team_slug: str) -> str:
+    print(f"Ensuring Vercel OIDC provider for team: {team_slug}", flush=True)
     provider_url = build_vercel_oidc_provider_url(team_slug)
     provider_host_path = provider_url.removeprefix("https://")
     audience = build_vercel_audience(team_slug)
@@ -443,7 +470,9 @@ def ensure_vercel_oidc_provider(account_id: str, team_slug: str) -> str:
             ["aws", "iam", "get-open-id-connect-provider", "--open-id-connect-provider-arn", provider_arn]
         )
         if detail_code == 0 and detail.get("Url") == provider_host_path:
+            print(f"Vercel OIDC provider exists: {provider_arn}", flush=True)
             if audience not in detail.get("ClientIDList", []):
+                print("Adding Vercel OIDC audience to existing provider.", flush=True)
                 run(
                     [
                         "aws",
@@ -457,6 +486,7 @@ def ensure_vercel_oidc_provider(account_id: str, team_slug: str) -> str:
                 )
             return provider_arn
 
+    print(f"Creating Vercel OIDC provider: {provider_url}", flush=True)
     run(
         [
             "aws",
@@ -512,10 +542,12 @@ def build_vercel_invoke_policy(account_id: str, region: str) -> dict[str, Any]:
 
 
 def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> str:
+    print(f"Ensuring Vercel agent invoke IAM role: {VERCEL_AGENT_ROLE_NAME}", flush=True)
     ensure_vercel_oidc_provider(account_id, team_slug)
     trust_policy = build_vercel_trust_policy(account_id, team_slug)
     role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
     if role_code == 0:
+        print(f"Updating Vercel IAM role trust policy: {VERCEL_AGENT_ROLE_NAME}", flush=True)
         run(
             [
                 "aws",
@@ -529,6 +561,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
         )
         role_arn = get_role_arn(role_data, VERCEL_AGENT_ROLE_NAME)
     else:
+        print(f"Creating Vercel IAM role: {VERCEL_AGENT_ROLE_NAME}", flush=True)
         run(
             [
                 "aws",
@@ -547,6 +580,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
             raise RuntimeError(f"Unable to create or load IAM role {VERCEL_AGENT_ROLE_NAME}")
         role_arn = get_role_arn(role_data, VERCEL_AGENT_ROLE_NAME)
 
+    print(f"Writing Vercel invoke policy: {VERCEL_AGENT_POLICY_NAME}", flush=True)
     run(
         [
             "aws",
@@ -564,6 +598,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
 
 
 def ensure_vercel_project(vercel_token: str, vercel_team_id: str) -> None:
+    print(f"Ensuring Vercel project exists: {VERCEL_PROJECT_NAME}", flush=True)
     project = vercel_request_json(
         method="GET",
         path=vercel_project_path(),
@@ -572,8 +607,10 @@ def ensure_vercel_project(vercel_token: str, vercel_team_id: str) -> None:
         not_found_ok=True,
     )
     if project is not None:
+        print(f"Vercel project exists: {VERCEL_PROJECT_NAME}", flush=True)
         return
 
+    print(f"Creating Vercel project: {VERCEL_PROJECT_NAME}", flush=True)
     vercel_request_json(
         method="POST",
         path="/v11/projects",
@@ -587,6 +624,7 @@ def ensure_vercel_project(vercel_token: str, vercel_team_id: str) -> None:
 
 
 def list_vercel_project_envs(vercel_token: str, vercel_team_id: str) -> list[dict[str, Any]]:
+    print(f"Listing Vercel project env vars for {VERCEL_PROJECT_NAME}.", flush=True)
     envs: list[dict[str, Any]] = []
     query: dict[str, str] | None = None
     while True:
@@ -620,6 +658,7 @@ def vercel_env_targets(env_entry: dict[str, Any]) -> list[str]:
 
 def sync_vercel_oidc_env(vercel_token: str, vercel_team_id: str, values: dict[str, str]) -> None:
     for key, value in sorted(values.items()):
+        print(f"Syncing Vercel production env var: {key}", flush=True)
         vercel_request_json(
             method="POST",
             path=vercel_project_env_path(),
@@ -636,6 +675,7 @@ def sync_vercel_oidc_env(vercel_token: str, vercel_team_id: str, values: dict[st
 
 
 def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
+    log_section("Configuring Vercel OIDC access")
     region = os.environ["AWS_REGION"]
     account_id = get_aws_account_id()
     team_slug = get_vercel_team_slug(vercel_token, vercel_team_id)
@@ -655,6 +695,7 @@ def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
 
 
 def deploy_webui() -> None:
+    log_section("Deploying WebUI to Vercel")
     if not shutil.which("npx"):
         raise RuntimeError("npx is required to deploy the WebUI to Vercel")
     vercel_token = os.environ.get("VERCEL_TOKEN")
@@ -700,6 +741,7 @@ def deploy_webui() -> None:
 
 
 def main() -> int:
+    log_section("Validating repo definitions before deploy")
     run([sys.executable, "-m", "repo_tools", "validate-agents"])
     run([sys.executable, "-m", "repo_tools", "validate-db"])
     run([sys.executable, "-m", "repo_tools", "codegen-check"])

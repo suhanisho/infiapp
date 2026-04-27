@@ -31,14 +31,35 @@ jobs:
           cache: npm
           cache-dependency-path: webUI/package-lock.json
 
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          node --version
+          npm --version
+          git --version
+          echo "::endgroup::"
+
       - name: Install WebUI dependencies
-        run: npm --prefix webUI ci
+        run: |
+          echo "::group::Install WebUI dependencies"
+          npm --prefix webUI ci
+          echo "::endgroup::"
 
       - name: Build WebUI
-        run: python -m repo_tools build-web
+        run: |
+          echo "::group::Build WebUI"
+          python -m repo_tools build-web
+          echo "::endgroup::"
 
       - name: Install Playwright browser
-        run: npm --prefix webUI exec playwright install --with-deps chromium
+        run: |
+          echo "::group::Install Playwright Chromium"
+          npm --prefix webUI exec playwright install --with-deps chromium
+          echo "::endgroup::"
 
       - name: Playwright E2E and screenshot tests
-        run: python -m repo_tools test-web-e2e
+        run: |
+          echo "::group::Playwright E2E and screenshot tests"
+          python -m repo_tools test-web-e2e
+          echo "::endgroup::"

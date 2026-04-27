@@ -28,5 +28,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          aws --version
+          echo "::endgroup::"
+
+      - name: Install Python dependencies
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
+
       - name: Validate deployed state
-        run: python -m repo_tools.check_deployed_state
+        run: |
+          echo "::group::Validate deployed state"
+          python -m repo_tools.check_deployed_state
+          echo "::endgroup::"

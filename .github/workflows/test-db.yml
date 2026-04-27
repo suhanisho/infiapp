@@ -25,8 +25,28 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Log runtime versions
+        run: |
+          echo "::group::Runtime versions"
+          python --version
+          python -m pip --version
+          git --version
+          echo "::endgroup::"
+
+      - name: Install Python dependencies
+        run: |
+          echo "::group::Install Python dependencies"
+          python -m pip install ".[dev]"
+          echo "::endgroup::"
+
       - name: Validate DynamoDB specs
-        run: python -m repo_tools validate-db
+        run: |
+          echo "::group::Validate DynamoDB specs"
+          python -m repo_tools validate-db
+          echo "::endgroup::"
 
       - name: Check generated files
-        run: python -m repo_tools codegen-check
+        run: |
+          echo "::group::Check generated files"
+          python -m repo_tools codegen-check
+          echo "::endgroup::"
