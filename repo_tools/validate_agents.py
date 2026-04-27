@@ -25,12 +25,15 @@ REQUIRED_FIELDS = {
     "memory_mb": int,
     "timeout_seconds": int,
     "ephemeral_storage_mb": int,
+    "api_context": list,
     "required_dependencies": list,
 }
 REQUIRED_HANDLER_PATH = Path("code") / "handler.py"
 MEMORY_MB_RANGE = (128, 10_240)
 TIMEOUT_SECONDS_RANGE = (1, 900)
 EPHEMERAL_STORAGE_MB_RANGE = (512, 10_240)
+CALL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+SCHEMA_TYPES = {"string", "number", "boolean", "object", "array", "any", "null"}
 
 
 def defines_lambda_handler(handler_path: Path) -> bool:
@@ -42,6 +45,109 @@ def defines_lambda_handler(handler_path: Path) -> bool:
         isinstance(node, ast.FunctionDef) and node.name == "lambda_handler"
         for node in tree.body
     )
+
+
+def validate_schema(path: Path, schema: object, label: str) -> list[str]:
+    if not isinstance(schema, dict):
+        return [f"{repo_relative(path)}: {label} must be an object"]
+
+    errors: list[str] = []
+    schema_type = schema.get("type")
+    if schema_type not in SCHEMA_TYPES:
+        errors.append(f"{repo_relative(path)}: {label}.type must be one of {sorted(SCHEMA_TYPES)}")
+        return errors
+
+    allowed_fields = {"type", "description", "nullable", "const"}
+    if schema_type == "object":
+        allowed_fields.update({"properties", "required", "additionalProperties"})
+        properties = schema.get("properties", {})
+        if "properties" in schema and not isinstance(properties, dict):
+            errors.append(f"{repo_relative(path)}: {label}.properties must be an object")
+        elif isinstance(properties, dict):
+            for prop_name, prop_schema in properties.items():
+                if not isinstance(prop_name, str) or not prop_name:
+                    errors.append(f"{repo_relative(path)}: {label}.properties keys must be non-empty strings")
+                    continue
+                errors.extend(validate_schema(path, prop_schema, f"{label}.properties.{prop_name}"))
+
+        required = schema.get("required", [])
+        if "required" in schema:
+            if not isinstance(required, list) or not all(isinstance(item, str) for item in required):
+                errors.append(f"{repo_relative(path)}: {label}.required must be a list of strings")
+            elif isinstance(properties, dict):
+                missing_required = sorted(set(required) - set(properties))
+                if missing_required:
+                    errors.append(
+                        f"{repo_relative(path)}: {label}.required references unknown field(s): {missing_required}"
+                    )
+
+        additional_properties = schema.get("additionalProperties")
+        if isinstance(additional_properties, dict):
+            errors.extend(validate_schema(path, additional_properties, f"{label}.additionalProperties"))
+        elif additional_properties is not None and not isinstance(additional_properties, bool):
+            errors.append(f"{repo_relative(path)}: {label}.additionalProperties must be boolean or schema object")
+
+    if schema_type == "array":
+        allowed_fields.add("items")
+        if "items" not in schema:
+            errors.append(f"{repo_relative(path)}: {label}.items is required for arrays")
+        else:
+            errors.extend(validate_schema(path, schema["items"], f"{label}.items"))
+
+    if "nullable" in schema and not isinstance(schema["nullable"], bool):
+        errors.append(f"{repo_relative(path)}: {label}.nullable must be boolean")
+    if "const" in schema and not isinstance(schema["const"], (str, int, float, bool)):
+        errors.append(f"{repo_relative(path)}: {label}.const must be a scalar")
+
+    extra_fields = sorted(set(schema) - allowed_fields)
+    if extra_fields:
+        errors.append(f"{repo_relative(path)}: {label} has unexpected field(s): {extra_fields}")
+
+    return errors
+
+
+def validate_api_context(path: Path, value: object) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{repo_relative(path)}: api_context must be a list"]
+    if not value:
+        return [f"{repo_relative(path)}: api_context must contain at least one call"]
+
+    errors: list[str] = []
+    seen_calls: set[str] = set()
+    for index, entry in enumerate(value):
+        label = f"api_context[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{repo_relative(path)}: {label} must be an object")
+            continue
+        required_fields = {"call": str, "description": str, "input": dict, "output": dict}
+        for field, expected_type in required_fields.items():
+            if field not in entry:
+                errors.append(f"{repo_relative(path)}: {label} missing '{field}'")
+                continue
+            if not isinstance(entry[field], expected_type):
+                errors.append(f"{repo_relative(path)}: {label}.{field} must be {expected_type.__name__}")
+        extra_fields = sorted(set(entry) - set(required_fields))
+        if extra_fields:
+            errors.append(f"{repo_relative(path)}: {label} has unexpected field(s): {extra_fields}")
+
+        call = entry.get("call")
+        if isinstance(call, str):
+            if not CALL_NAME_RE.fullmatch(call):
+                errors.append(f"{repo_relative(path)}: {label}.call must be lowercase snake_case")
+            if call in seen_calls:
+                errors.append(f"{repo_relative(path)}: duplicate api_context call '{call}'")
+            seen_calls.add(call)
+
+        description = entry.get("description")
+        if isinstance(description, str) and not description.strip():
+            errors.append(f"{repo_relative(path)}: {label}.description must not be empty")
+
+        if isinstance(entry.get("input"), dict):
+            errors.extend(validate_schema(path, entry["input"], f"{label}.input"))
+        if isinstance(entry.get("output"), dict):
+            errors.extend(validate_schema(path, entry["output"], f"{label}.output"))
+
+    return errors
 
 
 def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[str]:
@@ -81,6 +187,8 @@ def validate_spec(agent_dir: Path, pinned_dependencies: dict[str, str]) -> list[
         errors.append(
             f"{repo_relative(spec_path)}: connectivity must be one of {sorted(VALID_CONNECTIVITY)}"
         )
+
+    errors.extend(validate_api_context(spec_path, spec.get("api_context")))
 
     ranged_fields = {
         "memory_mb": MEMORY_MB_RANGE,

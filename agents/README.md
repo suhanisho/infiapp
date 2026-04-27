@@ -24,6 +24,27 @@ agents/<agent_name>/
   "memory_mb": 128,
   "timeout_seconds": 30,
   "ephemeral_storage_mb": 512,
+  "api_context": [
+    {
+      "call": "store_message",
+      "description": "Stores one user message.",
+      "input": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "required": ["action", "message"],
+        "properties": {
+          "action": { "type": "string", "const": "store_message" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  ],
   "required_dependencies": [
     "boto3"
   ]
@@ -37,7 +58,21 @@ Fields:
 - `memory_mb`: Lambda memory size in MB, from 128 through 10240.
 - `timeout_seconds`: Lambda timeout in seconds, from 1 through 900.
 - `ephemeral_storage_mb`: Lambda `/tmp` storage in MB, from 512 through 10240.
+- `api_context`: non-empty list of supported calls. Each call declares `call`, `description`, `input`, and `output`.
 - `required_dependencies`: package names used by the agent. Each name must resolve to an exact pinned requirement in root `pyproject.toml`.
+
+## API Interface
+
+`api_context` is the external contract for an agent. `call` is the action name passed to the Lambda, while `input` and `output` use the repo's small schema format:
+
+- `type`: one of `string`, `number`, `boolean`, `object`, `array`, `any`, or `null`.
+- `required`: object field names that must be present.
+- `properties`: object field schemas.
+- `items`: array item schema.
+- `nullable`: allow `null`.
+- `const`: fixed scalar value, useful for response `action` fields.
+
+Repo codegen uses `api_context` to generate typed WebUI agent clients and local mocks. Add or update API tests when changing it.
 
 Framework defaults:
 

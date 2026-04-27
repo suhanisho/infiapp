@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { callSampleAgent } from "@/src/lib/generated/agents";
+import { callSampleAgentListMessages, callSampleAgentStoreMessage } from "@/src/lib/generated/agents";
 
 function parseLimit(value: string | null): number {
   if (!value) {
@@ -29,8 +29,7 @@ function parseNextKey(value: string | null): Record<string, unknown> | undefined
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const response = await callSampleAgent({
-      action: "list_messages",
+    const response = await callSampleAgentListMessages({
       limit: parseLimit(url.searchParams.get("limit")),
       nextKey: parseNextKey(url.searchParams.get("nextKey")),
     });
@@ -44,9 +43,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const payload = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const response = await callSampleAgent({
-      action: "store_message",
-      message: payload.message,
+    const response = await callSampleAgentStoreMessage({
+      message: typeof payload.message === "string" ? payload.message : "",
     });
     return NextResponse.json(response);
   } catch (error) {

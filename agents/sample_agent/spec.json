@@ -4,6 +4,107 @@
   "memory_mb": 128,
   "timeout_seconds": 30,
   "ephemeral_storage_mb": 512,
+  "api_context": [
+    {
+      "call": "store_message",
+      "description": "Stores one user message and returns the stored item.",
+      "input": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "type": "object",
+        "required": ["action", "message", "item", "stored"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "store_message"
+          },
+          "message": {
+            "type": "string"
+          },
+          "item": {
+            "type": "object",
+            "required": ["messageId", "createdAt", "message"],
+            "properties": {
+              "messageId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "stored": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "call": "list_messages",
+      "description": "Lists stored messages in descending creation order with pagination.",
+      "input": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "limit": {
+            "type": "number"
+          },
+          "nextKey": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "type": "any"
+            }
+          }
+        }
+      },
+      "output": {
+        "type": "object",
+        "required": ["action", "messages", "nextKey"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "list_messages"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["messageId", "createdAt", "message"],
+              "properties": {
+                "messageId": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "nextKey": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "type": "any"
+            }
+          }
+        }
+      }
+    }
+  ],
   "required_dependencies": [
     "boto3"
   ]

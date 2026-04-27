@@ -3,13 +3,13 @@
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 
-import { mockCallSampleAgent, type AgentResponse, type AgentRequest } from "./mockAgents";
+import { mockCallSampleAgent, type SampleAgentListMessagesInput, type SampleAgentListMessagesOutput, type SampleAgentStoreMessageInput, type SampleAgentStoreMessageOutput } from "./mockAgents";
 
 type AgentBackendMode = "mock" | "aws_oidc";
 
-type LambdaEnvelope = {
+type LambdaEnvelope<T> = {
   statusCode?: number;
-  body?: string | AgentResponse;
+  body?: string | T;
 };
 
 let lambdaClient: LambdaClient | undefined;
@@ -48,27 +48,27 @@ function getLambdaClient(): LambdaClient {
   return lambdaClient;
 }
 
-function parseLambdaPayload(functionName: string, payloadText: string): AgentResponse {
+function parseLambdaPayload<T>(functionName: string, payloadText: string): T {
   if (!payloadText) {
     throw new Error(`${functionName} returned an empty payload.`);
   }
 
-  const envelope = JSON.parse(payloadText) as LambdaEnvelope;
+  const envelope = JSON.parse(payloadText) as LambdaEnvelope<T>;
   if (typeof envelope.statusCode === "number" && envelope.statusCode >= 400) {
     throw new Error(`${functionName} failed with status ${envelope.statusCode}`);
   }
 
   if (typeof envelope.body === "string") {
-    return JSON.parse(envelope.body) as AgentResponse;
+    return JSON.parse(envelope.body) as T;
   }
   if (envelope.body && typeof envelope.body === "object") {
     return envelope.body;
   }
 
-  return envelope as AgentResponse;
+  return envelope as T;
 }
 
-async function invokeAgent(functionName: string, payload: AgentRequest): Promise<AgentResponse> {
+async function invokeLambda<T>(functionName: string, payload: object): Promise<T> {
   const response = await getLambdaClient().send(
     new InvokeCommand({
       FunctionName: functionName,
@@ -78,12 +78,21 @@ async function invokeAgent(functionName: string, payload: AgentRequest): Promise
   );
 
   const payloadText = response.Payload ? new TextDecoder().decode(response.Payload) : "";
-  return parseLambdaPayload(functionName, payloadText);
+  return parseLambdaPayload<T>(functionName, payloadText);
 }
 
-export async function callSampleAgent(payload: AgentRequest = {}): Promise<AgentResponse> {
+export async function callSampleAgentListMessages(input: SampleAgentListMessagesInput): Promise<SampleAgentListMessagesOutput> {
+  const payload: { action: "list_messages" } & SampleAgentListMessagesInput = { action: "list_messages", ...input };
   if (getBackendMode() === "mock") {
-    return mockCallSampleAgent(payload);
+    return mockCallSampleAgent(payload) as Promise<SampleAgentListMessagesOutput>;
   }
-  return invokeAgent("sample_agent", payload);
+  return invokeLambda<SampleAgentListMessagesOutput>("sample_agent", payload);
+}
+
+export async function callSampleAgentStoreMessage(input: SampleAgentStoreMessageInput): Promise<SampleAgentStoreMessageOutput> {
+  const payload: { action: "store_message" } & SampleAgentStoreMessageInput = { action: "store_message", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallSampleAgent(payload) as Promise<SampleAgentStoreMessageOutput>;
+  }
+  return invokeLambda<SampleAgentStoreMessageOutput>("sample_agent", payload);
 }
