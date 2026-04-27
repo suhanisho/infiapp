@@ -2,6 +2,8 @@
 
 Use `README.md` as the complete framework guide. This file only points coding assistants at the repo conventions.
 
+Hard rule: never push directly to `main`. Work on a branch and open a pull request for every change.
+
 Expected workflow:
 
 1. Install Python dependencies with `python -m repo_tools install-python` after venv activation.
@@ -12,6 +14,13 @@ Expected workflow:
 6. Run `python -m repo_tools check` before finalizing larger changes.
 
 Python dependencies are pinned in root `pyproject.toml`. Agent specs list package names in `required_dependencies`; validation fails if a listed package is not pinned.
+
+Change conventions:
+
+- Agents: add `spec.json`, `code/handler.py`, tests under `test/`, owned DynamoDB specs when needed, and dependency names in `required_dependencies`.
+- DynamoDB: keep partition and sort key names and types stable; update tests around changed reads or writes.
+- WebUI: add package tests for client logic and Playwright coverage for visible workflows.
+- Generated files: edit specs or generator code, then run `python -m repo_tools codegen`.
 
 Generated files:
 
