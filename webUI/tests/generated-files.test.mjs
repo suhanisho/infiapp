@@ -7,6 +7,7 @@ test("generated web agent client exposes sample agent", async () => {
 
   assert.match(source, /callSampleAgent/);
   assert.match(source, /payload: AgentRequest/);
-  assert.match(source, /SAMPLE_AGENT_URL/);
+  assert.match(source, /INFIAPP_AGENT_BACKEND_MODE/);
+  assert.match(source, /awsCredentialsProvider/);
   assert.match(source, /mockCallSampleAgent/);
 });

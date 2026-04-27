@@ -46,7 +46,7 @@ Framework defaults:
 - Agent specs do not declare IAM policy JSON.
 - Agent specs do not declare environment variables or event triggers yet.
 - Each agent automatically receives full access to DynamoDB tables declared under `dynamodb/<agent_name>/`.
-- External agents get generated WebUI clients and are intended to be callable through Lambda Function URLs.
+- External agents get generated WebUI clients and are invoked by the deployed WebUI through Vercel OIDC IAM access.
 
 ## Code
 

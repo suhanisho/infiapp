@@ -10,6 +10,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -31,6 +34,16 @@ AWS_ATTRIBUTE_TYPES = {
     "Number": "N",
     "Binary": "B",
 }
+OIDC_PROVIDER_HOST = "oidc.vercel.com"
+VERCEL_API_BASE = "https://api.vercel.com"
+VERCEL_PROJECT_NAME = "infiapp-webui"
+VERCEL_AGENT_ROLE_NAME = f"vercel-{VERCEL_PROJECT_NAME}-agent-invoke"
+VERCEL_AGENT_POLICY_NAME = "invoke-external-agents"
+VERCEL_MANAGED_ENV_KEYS = {
+    "AWS_REGION",
+    "AWS_ROLE_ARN",
+    "INFIAPP_AGENT_BACKEND_MODE",
+}
 
 
 def run(
@@ -40,8 +53,22 @@ def run(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    print("+", " ".join(command), flush=True)
+    print("+", " ".join(redact_command(command)), flush=True)
     return subprocess.run(command, cwd=cwd, text=True, check=check, env=env)
+
+
+def redact_command(command: list[str]) -> list[str]:
+    redacted: list[str] = []
+    skip_next = False
+    for part in command:
+        if skip_next:
+            redacted.append("<redacted>")
+            skip_next = False
+            continue
+        redacted.append(part)
+        if part == "--token":
+            skip_next = True
+    return redacted
 
 
 def aws_json(command: list[str]) -> tuple[int, dict[str, Any]]:
@@ -51,11 +78,60 @@ def aws_json(command: list[str]) -> tuple[int, dict[str, Any]]:
     return 0, json.loads(result.stdout or "{}")
 
 
+def vercel_request_json(
+    *,
+    method: str,
+    path: str,
+    token: str,
+    team_id: str | None = None,
+    body: dict[str, Any] | None = None,
+    query: dict[str, str] | None = None,
+    not_found_ok: bool = False,
+) -> dict[str, Any] | None:
+    params = dict(query or {})
+    if team_id:
+        params["teamId"] = team_id
+    query_string = f"?{urllib.parse.urlencode(params)}" if params else ""
+    url = f"{VERCEL_API_BASE}{path}{query_string}"
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            raw_body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        raw_body = exc.read().decode("utf-8", errors="replace")
+        if not_found_ok and exc.code == 404:
+            return None
+        raise RuntimeError(
+            f"Vercel API {method} {path} failed with HTTP {exc.code}: {raw_body or '<empty>'}"
+        ) from exc
+
+    return json.loads(raw_body) if raw_body else {}
+
+
 def get_aws_account_id() -> str:
     code, data = aws_json(["aws", "sts", "get-caller-identity"])
     if code != 0 or not isinstance(data.get("Account"), str):
         raise RuntimeError("Unable to determine AWS account id from configured credentials")
     return data["Account"]
+
+
+def external_agent_names() -> list[str]:
+    names: list[str] = []
+    for agent_dir in iter_agent_dirs():
+        spec = load_json(agent_dir / "spec.json")
+        if spec["connectivity"] == "external":
+            names.append(spec["name"])
+    return sorted(names)
 
 
 def deploy_tables() -> None:
@@ -268,36 +344,287 @@ def deploy_agents() -> None:
                 url_code, _ = aws_json(
                     ["aws", "lambda", "get-function-url-config", "--function-name", function_name]
                 )
-                if url_code != 0:
+                if url_code == 0:
                     run(
                         [
                             "aws",
                             "lambda",
-                            "create-function-url-config",
+                            "delete-function-url-config",
                             "--function-name",
                             function_name,
-                            "--auth-type",
-                            "NONE",
                         ]
                     )
-                    run(
-                        [
-                            "aws",
-                            "lambda",
-                            "add-permission",
-                            "--function-name",
-                            function_name,
-                            "--statement-id",
-                            "infiapp-public-function-url",
-                            "--action",
-                            "lambda:InvokeFunctionUrl",
-                            "--principal",
-                            "*",
-                            "--function-url-auth-type",
-                            "NONE",
-                        ],
-                        check=False,
-                    )
+                print(f"External agent deploy ready for IAM invocation: {function_name}")
+
+
+def get_vercel_team_slug(vercel_token: str, vercel_team_id: str) -> str:
+    team = vercel_request_json(
+        method="GET",
+        path=f"/v2/teams/{urllib.parse.quote(vercel_team_id)}",
+        token=vercel_token,
+        not_found_ok=True,
+    )
+    if not isinstance(team, dict):
+        raise RuntimeError(f"Vercel team {vercel_team_id} could not be fetched")
+    slug = team.get("slug")
+    if not isinstance(slug, str) or not slug:
+        raise RuntimeError(f"Vercel team {vercel_team_id} did not return a slug")
+    return slug
+
+
+def build_vercel_oidc_provider_url(team_slug: str) -> str:
+    return f"https://{OIDC_PROVIDER_HOST}/{team_slug}"
+
+
+def build_vercel_audience(team_slug: str) -> str:
+    return f"https://vercel.com/{team_slug}"
+
+
+def build_vercel_oidc_provider_arn(account_id: str, team_slug: str) -> str:
+    return f"arn:aws:iam::{account_id}:oidc-provider/{OIDC_PROVIDER_HOST}/{team_slug}"
+
+
+def ensure_vercel_oidc_provider(account_id: str, team_slug: str) -> str:
+    provider_url = build_vercel_oidc_provider_url(team_slug)
+    provider_host_path = provider_url.removeprefix("https://")
+    audience = build_vercel_audience(team_slug)
+
+    code, data = aws_json(["aws", "iam", "list-open-id-connect-providers"])
+    if code != 0:
+        raise RuntimeError("Unable to list AWS OIDC providers")
+
+    for entry in data.get("OpenIDConnectProviderList", []):
+        provider_arn = entry.get("Arn")
+        if not isinstance(provider_arn, str):
+            continue
+        detail_code, detail = aws_json(
+            ["aws", "iam", "get-open-id-connect-provider", "--open-id-connect-provider-arn", provider_arn]
+        )
+        if detail_code == 0 and detail.get("Url") == provider_host_path:
+            if audience not in detail.get("ClientIDList", []):
+                run(
+                    [
+                        "aws",
+                        "iam",
+                        "add-client-id-to-open-id-connect-provider",
+                        "--open-id-connect-provider-arn",
+                        provider_arn,
+                        "--client-id",
+                        audience,
+                    ]
+                )
+            return provider_arn
+
+    run(
+        [
+            "aws",
+            "iam",
+            "create-open-id-connect-provider",
+            "--url",
+            provider_url,
+            "--client-id-list",
+            audience,
+        ]
+    )
+    return build_vercel_oidc_provider_arn(account_id, team_slug)
+
+
+def build_vercel_trust_policy(account_id: str, team_slug: str) -> dict[str, Any]:
+    claim_prefix = f"{OIDC_PROVIDER_HOST}/{team_slug}"
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Federated": build_vercel_oidc_provider_arn(account_id, team_slug),
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {
+                        f"{claim_prefix}:aud": build_vercel_audience(team_slug),
+                        f"{claim_prefix}:sub": (
+                            f"owner:{team_slug}:project:{VERCEL_PROJECT_NAME}:environment:production"
+                        ),
+                    },
+                },
+            },
+        ],
+    }
+
+
+def build_vercel_invoke_policy(account_id: str, region: str) -> dict[str, Any]:
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["lambda:InvokeFunction"],
+                "Resource": [
+                    f"arn:aws:lambda:{region}:{account_id}:function:{agent_name}"
+                    for agent_name in external_agent_names()
+                ],
+            },
+        ],
+    }
+
+
+def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> str:
+    ensure_vercel_oidc_provider(account_id, team_slug)
+    trust_policy = build_vercel_trust_policy(account_id, team_slug)
+    role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
+    if role_code == 0:
+        run(
+            [
+                "aws",
+                "iam",
+                "update-assume-role-policy",
+                "--role-name",
+                VERCEL_AGENT_ROLE_NAME,
+                "--policy-document",
+                json.dumps(trust_policy),
+            ]
+        )
+        role_arn = role_data["Role"]["Arn"]
+    else:
+        run(
+            [
+                "aws",
+                "iam",
+                "create-role",
+                "--role-name",
+                VERCEL_AGENT_ROLE_NAME,
+                "--assume-role-policy-document",
+                json.dumps(trust_policy),
+                "--description",
+                f"OIDC role for Vercel project {VERCEL_PROJECT_NAME} to invoke external Infiapp agents.",
+            ]
+        )
+        role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
+        if role_code != 0:
+            raise RuntimeError(f"Unable to create or load IAM role {VERCEL_AGENT_ROLE_NAME}")
+        role_arn = role_data["Role"]["Arn"]
+
+    run(
+        [
+            "aws",
+            "iam",
+            "put-role-policy",
+            "--role-name",
+            VERCEL_AGENT_ROLE_NAME,
+            "--policy-name",
+            VERCEL_AGENT_POLICY_NAME,
+            "--policy-document",
+            json.dumps(build_vercel_invoke_policy(account_id, region)),
+        ]
+    )
+    return role_arn
+
+
+def ensure_vercel_project(vercel_token: str, vercel_team_id: str) -> None:
+    project = vercel_request_json(
+        method="GET",
+        path=f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}",
+        token=vercel_token,
+        team_id=vercel_team_id,
+        not_found_ok=True,
+    )
+    if project is not None:
+        return
+
+    vercel_request_json(
+        method="POST",
+        path="/v11/projects",
+        token=vercel_token,
+        team_id=vercel_team_id,
+        body={
+            "name": VERCEL_PROJECT_NAME,
+            "framework": "nextjs",
+        },
+    )
+
+
+def list_vercel_project_envs(vercel_token: str, vercel_team_id: str) -> list[dict[str, Any]]:
+    envs: list[dict[str, Any]] = []
+    query: dict[str, str] | None = None
+    while True:
+        response = vercel_request_json(
+            method="GET",
+            path=f"/v10/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env",
+            token=vercel_token,
+            team_id=vercel_team_id,
+            query=query,
+        )
+        if not isinstance(response, dict):
+            return envs
+        page_envs = response.get("envs")
+        if isinstance(page_envs, list):
+            envs.extend(entry for entry in page_envs if isinstance(entry, dict))
+        pagination = response.get("pagination")
+        next_cursor = pagination.get("next") if isinstance(pagination, dict) else None
+        if not isinstance(next_cursor, (int, str)):
+            return envs
+        query = {"from": str(next_cursor)}
+
+
+def vercel_env_targets(env_entry: dict[str, Any]) -> list[str]:
+    raw_target = env_entry.get("target")
+    if isinstance(raw_target, str):
+        return [raw_target]
+    if isinstance(raw_target, list):
+        return [target for target in raw_target if isinstance(target, str)]
+    return []
+
+
+def sync_vercel_oidc_env(vercel_token: str, vercel_team_id: str, values: dict[str, str]) -> None:
+    for env_entry in list_vercel_project_envs(vercel_token, vercel_team_id):
+        key = env_entry.get("key")
+        env_id = env_entry.get("id")
+        if (
+            isinstance(key, str)
+            and key in VERCEL_MANAGED_ENV_KEYS
+            and isinstance(env_id, str)
+            and "production" in vercel_env_targets(env_entry)
+        ):
+            vercel_request_json(
+                method="DELETE",
+                path=f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env/{urllib.parse.quote(env_id)}",
+                token=vercel_token,
+                team_id=vercel_team_id,
+            )
+
+    for key, value in sorted(values.items()):
+        vercel_request_json(
+            method="POST",
+            path=f"/v10/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}/env",
+            token=vercel_token,
+            team_id=vercel_team_id,
+            body={
+                "key": key,
+                "value": value,
+                "type": "plain",
+                "target": ["production"],
+            },
+        )
+
+
+def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
+    region = os.environ["AWS_REGION"]
+    account_id = get_aws_account_id()
+    team_slug = get_vercel_team_slug(vercel_token, vercel_team_id)
+    ensure_vercel_project(vercel_token, vercel_team_id)
+    role_arn = ensure_vercel_agent_role(account_id, region, team_slug)
+    sync_vercel_oidc_env(
+        vercel_token,
+        vercel_team_id,
+        {
+            "AWS_REGION": region,
+            "AWS_ROLE_ARN": role_arn,
+            "INFIAPP_AGENT_BACKEND_MODE": "aws_oidc",
+        },
+    )
+    print(f"Synced Vercel OIDC agent access for {VERCEL_PROJECT_NAME} with role {role_arn}.")
+    return team_slug
 
 
 def deploy_webui() -> None:
@@ -309,13 +636,40 @@ def deploy_webui() -> None:
         raise RuntimeError("VERCEL_TOKEN must be set for WebUI deployment")
     if not vercel_team_id:
         raise RuntimeError("VERCEL_TEAM_ID must be set for WebUI deployment")
-    vercel_env = {
-        **os.environ,
-        "VERCEL_TOKEN": vercel_token,
-        "VERCEL_TEAM_ID": vercel_team_id,
-    }
+    vercel_team_slug = deploy_vercel_oidc_access(vercel_token, vercel_team_id)
+    vercel_env = {**os.environ, "VERCEL_TOKEN": vercel_token, "VERCEL_TEAM_ID": vercel_team_id}
     run(["npm", "ci"], cwd=WEBUI_DIR)
-    run(["npx", "vercel", "deploy", "--prod", "--yes"], cwd=WEBUI_DIR, env=vercel_env)
+    run(
+        [
+            "npx",
+            "vercel",
+            "link",
+            "--yes",
+            "--project",
+            VERCEL_PROJECT_NAME,
+            "--scope",
+            vercel_team_slug,
+            "--token",
+            vercel_token,
+        ],
+        cwd=WEBUI_DIR,
+        env=vercel_env,
+    )
+    run(
+        [
+            "npx",
+            "vercel",
+            "deploy",
+            "--prod",
+            "--yes",
+            "--scope",
+            vercel_team_slug,
+            "--token",
+            vercel_token,
+        ],
+        cwd=WEBUI_DIR,
+        env=vercel_env,
+    )
 
 
 def main() -> int:

@@ -100,10 +100,11 @@ Conventions:
 - Add curl smoke coverage for important API endpoints in `.github/workflows/test-webUI.yml`.
 - Add Playwright screenshot coverage for important user workflows, including phone-sized viewports.
 
-Required WebUI secrets and environment variables:
+WebUI production agent access:
 
-- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
-- `SAMPLE_AGENT_URL`: production URL for the external `sample_agent` Lambda Function URL.
+- External agent calls use generated AWS Lambda clients.
+- Local development and tests use generated mocks.
+- The deploy workflow configures Vercel production environment variables for OIDC access automatically.
 
 ## Repo Tools
 
@@ -258,8 +259,9 @@ Create the AWS secrets:
 For initial setup, the AWS keys are intentionally admin keys in an isolated account. The deploy workflow needs to create and update:
 
 - DynamoDB tables.
-- Lambda functions and Lambda Function URLs.
+- Lambda functions.
 - IAM roles and inline role policies for generated agent roles.
+- A Vercel OIDC IAM provider and project role for invoking external agents.
 - CloudWatch Logs permissions attached to generated Lambda roles.
 
 Create the Vercel secrets:
@@ -274,7 +276,7 @@ Do not install the Vercel GitHub app for this repo. Infiapp deploys the WebUI fr
 
 Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**. This repo does not require `AWS_ACCOUNT_ID`, `VERCEL_ORG_ID`, or `VERCEL_PROJECT_ID`; the AWS account id is read from the configured AWS credentials and Vercel is configured with `VERCEL_TOKEN` plus `VERCEL_TEAM_ID`.
 
-The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. Agent specs do not contain IAM policy JSON.
+The deploy workflow creates one IAM role per agent and grants that role full access to tables owned by the same agent. It also creates a Vercel OIDC role that can invoke external agents. Agent specs do not contain IAM policy JSON.
 
 Deploy manually from GitHub Actions after changes land on `main`. Do not deploy from a local machine. The deploy workflow runs:
 
@@ -282,12 +284,13 @@ Deploy manually from GitHub Actions after changes land on `main`. Do not deploy 
 python -m repo_tools.deploy
 ```
 
-The deploy tool is deliberately small and auditable. The GitHub Actions workflow uses it to create or update DynamoDB tables, package Lambda agents, and deploy the WebUI with Vercel.
+The deploy tool is deliberately small and auditable. The GitHub Actions workflow uses it to create or update DynamoDB tables, package Lambda agents, configure Vercel OIDC access, and deploy the WebUI with Vercel.
 
-Required runtime environment variables:
+The deploy workflow manages these Vercel production environment variables:
 
-- `SAMPLE_AGENT_URL`: set in Vercel production once the external Lambda Function URL exists. If this is missing, the WebUI uses its generated local mock.
-- `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
+- `AWS_REGION`
+- `AWS_ROLE_ARN`
+- `INFIAPP_AGENT_BACKEND_MODE=aws_oidc`
 
 ## Deployed State Verification
 
@@ -301,7 +304,7 @@ It verifies:
 
 - DynamoDB tables exist with matching primary and sort keys.
 - Lambda functions exist for every agent spec.
-- External agents have a Lambda Function URL configured.
+- Vercel OIDC access exists for invoking external agents.
 
 ## Development Conventions
 
