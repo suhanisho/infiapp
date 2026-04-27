@@ -130,19 +130,13 @@ Install Node dependencies:
 npm --prefix webUI install
 ```
 
-Generate framework helpers:
-
-```bash
-python -m repo_tools codegen
-```
-
 Run the WebUI against generated agent mocks:
 
 ```bash
 INFIAPP_AGENT_BACKEND_MODE=mock npm --prefix webUI run dev
 ```
 
-Open `http://localhost:3000` in a browser. The starter page should show `Hi from infiapp`; store a message and list messages to exercise the WebUI flow against the mock backend without deploying AWS resources.
+Open `http://localhost:3000` in a browser.
 
 ## Deployment
 
@@ -168,14 +162,6 @@ Create the AWS secrets:
 8. Copy the **Secret access key** into GitHub as `AWS_SECRET_ACCESS_KEY`.
 9. Set `AWS_REGION` to the AWS region you want to deploy into, for example `us-east-1`.
 
-For initial setup, the AWS keys are intentionally admin keys in an isolated account. The deploy workflow needs to create and update:
-
-- DynamoDB tables.
-- Lambda functions.
-- IAM roles and inline role policies for generated agent roles.
-- A Vercel OIDC IAM provider and project role for invoking external agents.
-- CloudWatch Logs permissions attached to generated Lambda roles.
-
 Create the Vercel secrets:
 
 1. Create or choose the Vercel team that should own the WebUI project.
@@ -184,7 +170,7 @@ Create the Vercel secrets:
 4. In Vercel, open the owning team's **Settings > General** page.
 5. Copy the **Team ID**, which starts with `team_`, and add it to GitHub as `VERCEL_TEAM_ID`.
 
-Do not install the Vercel GitHub app for this repo. Infiapp deploys the WebUI from the GitHub Actions deploy workflow.
+No need to install the Vercel GitHub app for this repo. Infiapp deploys the WebUI from the GitHub Actions deploy workflow.
 
 Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**. This repo does not require `AWS_ACCOUNT_ID`, `VERCEL_ORG_ID`, or `VERCEL_PROJECT_ID`; the AWS account id is read from the configured AWS credentials and Vercel is configured with `VERCEL_TOKEN` plus `VERCEL_TEAM_ID`.
 
