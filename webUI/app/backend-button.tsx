@@ -7,7 +7,7 @@ type CallState = "idle" | "loading" | "success" | "error";
 
 export function BackendButton() {
   const [state, setState] = useState<CallState>("idle");
-  const [input, setInput] = useState("hello from the web");
+  const [input, setInput] = useState("sample message from the web");
   const [message, setMessage] = useState("");
 
   async function callBackend(event: FormEvent<HTMLFormElement>) {
@@ -15,7 +15,7 @@ export function BackendButton() {
     setState("loading");
     setMessage("");
     try {
-      const response = await fetch("/api/hello", {
+      const response = await fetch("/api/sample", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: input }),

@@ -14,15 +14,14 @@ The framework keeps four concepts small and explicit:
 ```text
 agents/
   shared_utils/              Shared Python utilities copied onto every Lambda path
-  hello_agent/
+  sample_agent/
     code/                    Lambda handler and implementation
     test/                    Agent unit tests
     spec.json                Agent definition
 dynamodb/
   README.md                  DynamoDB table spec
-  hello_agent/
-    hello_calls.json         Starter call table owned by hello_agent
-    user_messages.json       Demo user-message table owned by hello_agent
+  sample_agent/
+    sample_messages.json     Demo message table owned by sample_agent
 repo_tools/
   codegen.py                 Generates DynamoDB helpers and WebUI agent clients
   validate_agents.py         Validates Lambda agent specs
@@ -57,8 +56,8 @@ agents/<agent_name>/
 
 ```json
 {
-  "name": "hello_agent",
-  "description": "Returns a hello response for the starter app.",
+  "name": "sample_agent",
+  "description": "Stores and echoes sample messages for the starter app.",
   "connectivity": "external",
   "handler": "handler.lambda_handler"
 }
@@ -84,22 +83,22 @@ Example:
 
 ```json
 {
-  "table_name": "infiapp_hello_calls",
-  "owner_agent": "hello_agent",
+  "table_name": "sample_messages",
+  "owner_agent": "sample_agent",
   "billing_mode": "PAY_PER_REQUEST",
   "primary_key": {
     "partition_key": {
-      "name": "agent_name",
+      "name": "app_name",
       "type": "S"
     },
     "sort_key": {
-      "name": "call_id",
+      "name": "message_id",
       "type": "S"
     }
   },
   "attributes": {
-    "agent_name": "S",
-    "call_id": "S",
+    "app_name": "S",
+    "message_id": "S",
     "created_at": "S",
     "message": "S"
   }
@@ -120,16 +119,16 @@ Compatibility rules:
 `webUI/` is a single Next.js App Router application. It has one starter page:
 
 - Displays `Hi from infiapp`.
-- Shows a message input and a button that calls `/api/hello`.
-- `/api/hello` uses the generated external agent client.
+- Shows a message input and a button that calls `/api/sample`.
+- `/api/sample` uses the generated external agent client.
 - In local development the generated client uses the mock and echoes the submitted message.
 - In production it calls the configured Lambda Function URL.
-- `hello_agent` stores submitted messages in `infiapp_user_messages` and returns the latest submitted message as `lastMessage`.
+- `sample_agent` stores submitted messages in `sample_messages` and returns the latest submitted message as `lastMessage`.
 
 Required WebUI secrets and environment variables:
 
 - `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
-- `HELLO_AGENT_URL`: production URL for the external `hello_agent` Lambda Function URL.
+- `SAMPLE_AGENT_URL`: production URL for the external `sample_agent` Lambda Function URL.
 
 ## Repo Tools
 
@@ -266,7 +265,7 @@ The deploy tool is deliberately small and auditable. It creates or updates Dynam
 
 Required runtime environment variables:
 
-- `HELLO_AGENT_URL`: set in Vercel production once the external Lambda Function URL exists. If this is missing, the WebUI uses its generated local mock.
+- `SAMPLE_AGENT_URL`: set in Vercel production once the external Lambda Function URL exists. If this is missing, the WebUI uses its generated local mock.
 - `NEXT_PUBLIC_APP_NAME`: optional display name, defaults to `Infiapp`.
 
 ## Deployed State Verification

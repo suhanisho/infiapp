@@ -1,2 +1,0 @@
-"""hello_agent tests."""
-

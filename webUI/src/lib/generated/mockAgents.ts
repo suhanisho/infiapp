@@ -10,12 +10,12 @@ export type AgentResponse = {
   stored?: boolean;
 };
 
-export async function mockCallHelloAgent(payload: AgentRequest = {}): Promise<AgentResponse> {
+export async function mockCallSampleAgent(payload: AgentRequest = {}): Promise<AgentResponse> {
   const lastMessage = typeof payload.message === "string" ? payload.message : "lambda was called";
   return {
     message: `lambda was called: ${lastMessage}`,
     lastMessage,
-    agent: "hello_agent",
+    agent: "sample_agent",
     mocked: true,
     stored: false,
   };

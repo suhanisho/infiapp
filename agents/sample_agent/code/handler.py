@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from generated.dynamodb import INFIAPP_USER_MESSAGES_TABLE
+from generated.dynamodb import SAMPLE_MESSAGES_TABLE
 from response import json_response
 
 
@@ -41,7 +41,7 @@ def _store_message(message: str) -> bool:
         return False
 
     created_at = datetime.now(timezone.utc).isoformat()
-    table_name = INFIAPP_USER_MESSAGES_TABLE["table_name"]
+    table_name = SAMPLE_MESSAGES_TABLE["table_name"]
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(table_name)
     table.put_item(
@@ -61,21 +61,21 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
     payload = _payload_from_event(event)
     message = str(payload.get("message", "")).strip()
     if not message:
-        return json_response(400, {"error": "message is required", "agent": "hello_agent"})
+        return json_response(400, {"error": "message is required", "agent": "sample_agent"})
 
     stored = _store_message(message)
     body = {
         "message": f"lambda was called: {message}",
         "lastMessage": message,
-        "agent": "hello_agent",
+        "agent": "sample_agent",
         "mocked": False,
         "stored": stored,
-        "table": INFIAPP_USER_MESSAGES_TABLE["table_name"],
+        "table": SAMPLE_MESSAGES_TABLE["table_name"],
     }
     return json_response(200, body)
 
 
-def local_call(message: str = "hello from local") -> dict[str, Any]:
+def local_call(message: str = "sample message from local") -> dict[str, Any]:
     """Convenience function used by local tooling and tests."""
     response = lambda_handler({"source": "local", "message": message})
     return json.loads(response["body"])
