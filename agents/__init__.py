@@ -1,1 +1,1 @@
-"""Infiapp Lambda agents."""
+"""Dr. Shalini's Clinic Lambda agents."""

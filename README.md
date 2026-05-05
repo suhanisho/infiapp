@@ -1,6 +1,6 @@
-# Infiapp
+# Dr. Shalini's Clinic
 
-Infiapp is a minimal, opinionated framework for building web applications. It abstracts infrastructure deployment and management into maintainable, secure repo conventions so builders can vibe code applications with a practical level of production readiness.
+Dr. Shalini's Clinic is a minimal, opinionated framework for building web applications. It abstracts infrastructure deployment and management into maintainable, secure repo conventions so builders can vibe code applications with a practical level of production readiness.
 
 The framework keeps four concepts small and explicit:
 
@@ -15,14 +15,14 @@ The framework keeps four concepts small and explicit:
 agents/
   README.md                  Agent folder contract and spec reference
   shared_utils/              Shared Python utilities copied onto every Lambda path
-  sample_agent/
+  clinic_agent/
     code/                    Lambda handler and implementation
     test/                    Agent unit tests
     spec.json                Agent definition
 dynamodb/
   README.md                  DynamoDB table spec
-  sample_agent/
-    sample_messages.json     Demo message table owned by sample_agent
+  clinic_agent/
+    clinic_*.json            Clinic action, patient, schedule, settings, and integration tables
 pyproject.toml               Repo-wide pinned Python dependency manifest
 repo_tools/
   python_dependencies.py     Resolves pinned Python dependencies from pyproject.toml
@@ -59,6 +59,10 @@ See [dynamodb/README.md](dynamodb/README.md) for the table spec format, supporte
 `webUI/` is a single Next.js App Router application. It can call external Lambda agents through generated helpers, uses generated agent mocks for local development, and should be tested with build checks and Playwright E2E screenshots.
 
 See [webUI/README.md](webUI/README.md) for WebUI conventions, generated helper usage, local mock behavior, and test expectations.
+
+## Google Workspace
+
+The clinic app is being prepared for Gmail and Google Calendar integration. Google Calendar is treated as the appointment source of truth, while Gmail is the patient communication source used to create in-app draft actions. See [docs/google-workspace-integrations.md](docs/google-workspace-integrations.md) for the integration path, required scopes, and safety rules.
 
 ## Repo Tools
 
@@ -118,7 +122,7 @@ npm --prefix webUI exec playwright install chromium
 Run the WebUI against generated agent mocks:
 
 ```bash
-INFIAPP_AGENT_BACKEND_MODE=mock npm --prefix webUI run dev
+SHALINI_CLINIC_AGENT_BACKEND_MODE=mock npm --prefix webUI run dev
 ```
 
 Open `http://localhost:3000` in a browser.
@@ -129,7 +133,7 @@ Create the AWS secrets:
 
 1. Use a dedicated AWS account for this app if possible.
 2. In the AWS Console, go to **IAM > Users > Create user**.
-3. Name the user `infiapp-control-plane`.
+3. Name the user `shalini-clinic-control-plane`.
 4. Choose **Attach policies directly** and attach the AWS managed policy `AdministratorAccess`.
 5. Open the new user, go to **Security credentials > Create access key**.
 6. Choose **Third-party service** as the use case.
@@ -145,7 +149,18 @@ Create the Vercel secrets:
 4. In Vercel, open the owning team's **Settings > General** page.
 5. Copy the **Team ID**, which starts with `team_`, and add it to GitHub as `VERCEL_TEAM_ID`.
 
-No need to install the Vercel GitHub app for this repo. Infiapp deploys the WebUI from the GitHub Actions deploy workflow.
+Create the Google OAuth secrets:
+
+1. In Google Cloud, create an OAuth web client for the clinic app.
+2. Add the production Auth.js callback URL as an authorized redirect URI: `https://<your-vercel-domain>/api/auth/callback/google`.
+3. Add the local callback URL if testing locally: `http://localhost:3000/api/auth/callback/google`.
+4. Add the OAuth client ID to GitHub as `GOOGLE_OAUTH_CLIENT_ID`.
+5. Add the OAuth client secret to GitHub as `GOOGLE_OAUTH_CLIENT_SECRET`.
+6. Add a long random value to GitHub as `NEXTAUTH_SECRET`.
+7. Add the allowed clinic Google accounts as a comma-separated GitHub repository variable named `CLINIC_ALLOWED_EMAILS`.
+8. Optionally add `NEXTAUTH_URL` and `GOOGLE_TOKEN_SECRET_PREFIX` as GitHub repository variables.
+
+No need to install the Vercel GitHub app for this repo. Dr. Shalini's Clinic deploys the WebUI from the GitHub Actions deploy workflow.
 
 Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**.
 

@@ -1,5 +1,5 @@
 {
-  "name": "infiapp-webui",
+  "name": "shalini-clinic-webui",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -13,6 +13,7 @@
     "@aws-sdk/client-lambda": "3.1024.0",
     "@vercel/oidc-aws-credentials-provider": "3.0.7",
     "next": "16.2.4",
+    "next-auth": "^4.24.14",
     "react": "19.2.5",
     "react-dom": "19.2.5"
   },

@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "infiapp"
+name = "shalini-clinic"
 version = "0.1.0"
-description = "Infiapp framework repo tools and Python dependency manifest"
+description = "Dr. Shalini's Clinic framework repo tools and Python dependency manifest"
 readme = "README.md"
 requires-python = "==3.11.*"
 dependencies = [

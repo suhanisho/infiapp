@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 import unittest
 from pathlib import Path
 from typing import Any
@@ -10,14 +11,50 @@ from typing import Any
 SHARED_UTILS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SHARED_UTILS_DIR))
 
+
+class FakeKey:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def eq(self, value: object) -> "FakeKey":
+        _ = value
+        return self
+
+    def between(self, start: object, end: object) -> "FakeKey":
+        _ = start, end
+        return self
+
+    def gte(self, value: object) -> "FakeKey":
+        _ = value
+        return self
+
+    def lte(self, value: object) -> "FakeKey":
+        _ = value
+        return self
+
+    def __and__(self, other: object) -> "FakeKey":
+        _ = other
+        return self
+
+
+fake_boto3 = types.ModuleType("boto3")
+fake_dynamodb = types.ModuleType("boto3.dynamodb")
+fake_conditions = types.ModuleType("boto3.dynamodb.conditions")
+setattr(fake_conditions, "Key", FakeKey)
+setattr(fake_dynamodb, "conditions", fake_conditions)
+setattr(fake_boto3, "dynamodb", fake_dynamodb)
+sys.modules.setdefault("boto3", fake_boto3)
+sys.modules.setdefault("boto3.dynamodb", fake_dynamodb)
+sys.modules.setdefault("boto3.dynamodb.conditions", fake_conditions)
+
 from generated.dynamodb import (  # noqa: E402
-    SampleMessagesItem,
-    delete_sample_messages,
-    get_sample_messages,
-    put_sample_messages,
-    query_sample_messages_by_message_id_range,
-    query_sample_messages_by_message_id_range_page,
-    query_sample_messages_item,
+    ClinicActionsItem,
+    delete_clinic_actions,
+    get_clinic_actions,
+    put_clinic_actions,
+    query_clinic_actions_by_action_id_range,
+    query_clinic_actions_by_action_id_range_page,
+    query_clinic_actions_item,
 )
 
 
@@ -27,15 +64,15 @@ class FakeTable:
         self.last_query_args: dict[str, Any] = {}
 
     def put_item(self, Item: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
-        self.items[(Item["app_name"], Item["message_id"])] = dict(Item)
+        self.items[(Item["clinic_id"], Item["action_id"])] = dict(Item)
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def get_item(self, Key: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
-        item = self.items.get((Key["app_name"], Key["message_id"]))
+        item = self.items.get((Key["clinic_id"], Key["action_id"]))
         return {"Item": dict(item)} if item else {}
 
     def delete_item(self, Key: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
-        self.items.pop((Key["app_name"], Key["message_id"]), None)
+        self.items.pop((Key["clinic_id"], Key["action_id"]), None)
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def query(self, **kwargs: Any) -> dict[str, Any]:
@@ -43,8 +80,8 @@ class FakeTable:
         response: dict[str, Any] = {"Items": list(self.items.values())}
         if kwargs.get("Limit") == 1:
             response["LastEvaluatedKey"] = {
-                "app_name": "infiapp",
-                "message_id": "message-1",
+                "clinic_id": "shalini-clinic",
+                "action_id": "act_001",
             }
         return response
 
@@ -58,78 +95,135 @@ class FakeDynamoDBResource:
 
 
 class GeneratedDynamoDBHelpersTest(unittest.TestCase):
-    def test_put_get_delete_sample_messages(self) -> None:
+    def test_put_get_delete_clinic_actions(self) -> None:
         dynamodb = FakeDynamoDBResource()
-        item: SampleMessagesItem = {
-            "app_name": "infiapp",
-            "message_id": "message-1",
+        item: ClinicActionsItem = {
+            "clinic_id": "shalini-clinic",
+            "action_id": "act_001",
+            "action_type": "enquiry",
+            "approved_at": "",
+            "approved_by": "",
+            "completed_at": "",
+            "completion_note": "",
             "created_at": "2026-04-27T00:00:00+00:00",
-            "message": "hello",
+            "draft_message": "hello",
+            "external_draft_id": "",
+            "external_sent_message_id": "",
+            "final_message": "",
+            "patient_id": "p10",
+            "patient_name": "Rachel Davies",
+            "priority": "new",
+            "source_message": "source",
+            "source_message_id": "gmail-message-1",
+            "source_provider": "gmail",
+            "source_summary": "summary",
+            "source_thread_id": "gmail-thread-1",
+            "status": "needs_approval",
+            "time_label": "9:41 AM",
+            "updated_at": "2026-04-27T00:00:00+00:00",
         }
 
-        put_sample_messages(item, dynamodb_resource=dynamodb)
+        put_clinic_actions(item, dynamodb_resource=dynamodb)
 
-        loaded_item = get_sample_messages("infiapp", "message-1", dynamodb_resource=dynamodb)
-        self.assertEqual(loaded_item["message"] if loaded_item else None, "hello")
-        queried_item = query_sample_messages_item("infiapp", "message-1", dynamodb_resource=dynamodb)
-        self.assertEqual(queried_item["message"] if queried_item else None, "hello")
+        loaded_item = get_clinic_actions("shalini-clinic", "act_001", dynamodb_resource=dynamodb)
+        self.assertEqual(loaded_item["draft_message"] if loaded_item else None, "hello")
+        queried_item = query_clinic_actions_item("shalini-clinic", "act_001", dynamodb_resource=dynamodb)
+        self.assertEqual(queried_item["draft_message"] if queried_item else None, "hello")
 
-        delete_sample_messages("infiapp", "message-1", dynamodb_resource=dynamodb)
-        self.assertIsNone(get_sample_messages("infiapp", "message-1", dynamodb_resource=dynamodb))
+        delete_clinic_actions("shalini-clinic", "act_001", dynamodb_resource=dynamodb)
+        self.assertIsNone(get_clinic_actions("shalini-clinic", "act_001", dynamodb_resource=dynamodb))
 
-    def test_query_sample_messages_by_message_id_range_passes_query_options(self) -> None:
+    def test_query_clinic_actions_by_action_id_range_passes_query_options(self) -> None:
         dynamodb = FakeDynamoDBResource()
-        put_sample_messages(
+        put_clinic_actions(
             {
-                "app_name": "infiapp",
-                "message_id": "message-1",
+                "clinic_id": "shalini-clinic",
+                "action_id": "act_001",
+                "action_type": "enquiry",
+                "approved_at": "",
+                "approved_by": "",
+                "completed_at": "",
+                "completion_note": "",
                 "created_at": "2026-04-27T00:00:00+00:00",
-                "message": "latest",
+                "draft_message": "latest",
+                "external_draft_id": "",
+                "external_sent_message_id": "",
+                "final_message": "",
+                "patient_id": "p10",
+                "patient_name": "Rachel Davies",
+                "priority": "new",
+                "source_message": "source",
+                "source_message_id": "gmail-message-1",
+                "source_provider": "gmail",
+                "source_summary": "summary",
+                "source_thread_id": "gmail-thread-1",
+                "status": "needs_approval",
+                "time_label": "9:41 AM",
+                "updated_at": "2026-04-27T00:00:00+00:00",
             },
             dynamodb_resource=dynamodb,
         )
 
-        items = query_sample_messages_by_message_id_range(
-            "infiapp",
-            start_message_id="message-0",
-            end_message_id="message-9",
+        items = query_clinic_actions_by_action_id_range(
+            "shalini-clinic",
+            start_action_id="act_000",
+            end_action_id="act_999",
             dynamodb_resource=dynamodb,
             scan_index_forward=False,
             consistent_read=True,
             limit=1,
         )
 
-        table = dynamodb.Table("sample_messages")
-        self.assertEqual(items[0]["message"], "latest")
+        table = dynamodb.Table("clinic_actions")
+        self.assertEqual(items[0]["draft_message"], "latest")
         self.assertFalse(table.last_query_args["ScanIndexForward"])
         self.assertTrue(table.last_query_args["ConsistentRead"])
         self.assertEqual(table.last_query_args["Limit"], 1)
 
-    def test_query_sample_messages_by_message_id_range_page_returns_next_key(self) -> None:
+    def test_query_clinic_actions_by_action_id_range_page_returns_next_key(self) -> None:
         dynamodb = FakeDynamoDBResource()
-        put_sample_messages(
+        put_clinic_actions(
             {
-                "app_name": "infiapp",
-                "message_id": "message-1",
+                "clinic_id": "shalini-clinic",
+                "action_id": "act_001",
+                "action_type": "enquiry",
+                "approved_at": "",
+                "approved_by": "",
+                "completed_at": "",
+                "completion_note": "",
                 "created_at": "2026-04-27T00:00:00+00:00",
-                "message": "latest",
+                "draft_message": "latest",
+                "external_draft_id": "",
+                "external_sent_message_id": "",
+                "final_message": "",
+                "patient_id": "p10",
+                "patient_name": "Rachel Davies",
+                "priority": "new",
+                "source_message": "source",
+                "source_message_id": "gmail-message-1",
+                "source_provider": "gmail",
+                "source_summary": "summary",
+                "source_thread_id": "gmail-thread-1",
+                "status": "needs_approval",
+                "time_label": "9:41 AM",
+                "updated_at": "2026-04-27T00:00:00+00:00",
             },
             dynamodb_resource=dynamodb,
         )
 
-        page = query_sample_messages_by_message_id_range_page(
-            "infiapp",
-            exclusive_start_key={"app_name": "infiapp", "message_id": "message-0"},
+        page = query_clinic_actions_by_action_id_range_page(
+            "shalini-clinic",
+            exclusive_start_key={"clinic_id": "shalini-clinic", "action_id": "act_000"},
             dynamodb_resource=dynamodb,
             limit=1,
         )
 
-        table = dynamodb.Table("sample_messages")
-        self.assertEqual(page["items"][0]["message"], "latest")
-        self.assertEqual(page["next_key"], {"app_name": "infiapp", "message_id": "message-1"})
+        table = dynamodb.Table("clinic_actions")
+        self.assertEqual(page["items"][0]["draft_message"], "latest")
+        self.assertEqual(page["next_key"], {"clinic_id": "shalini-clinic", "action_id": "act_001"})
         self.assertEqual(
             table.last_query_args["ExclusiveStartKey"],
-            {"app_name": "infiapp", "message_id": "message-0"},
+            {"clinic_id": "shalini-clinic", "action_id": "act_000"},
         )
 
 

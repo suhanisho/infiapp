@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Infiapp",
-  description: "Minimal web app built with the Infiapp framework.",
+  title: "Dr. Shalini's Clinic",
+  description: "Clinic assistant for actions, schedule, patients, and approval records.",
 };
 
 export default function RootLayout({

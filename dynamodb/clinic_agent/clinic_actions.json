@@ -1,0 +1,37 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "clinic_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "action_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "action_id": "String",
+    "action_type": "String",
+    "approved_at": "String",
+    "approved_by": "String",
+    "clinic_id": "String",
+    "completed_at": "String",
+    "completion_note": "String",
+    "created_at": "String",
+    "draft_message": "String",
+    "external_draft_id": "String",
+    "external_sent_message_id": "String",
+    "final_message": "String",
+    "patient_id": "String",
+    "patient_name": "String",
+    "priority": "String",
+    "source_message": "String",
+    "source_message_id": "String",
+    "source_provider": "String",
+    "source_summary": "String",
+    "source_thread_id": "String",
+    "status": "String",
+    "time_label": "String",
+    "updated_at": "String"
+  }
+}

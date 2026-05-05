@@ -37,13 +37,35 @@ AWS_ATTRIBUTE_TYPES = {
 }
 OIDC_PROVIDER_HOST = "oidc.vercel.com"
 VERCEL_API_BASE = "https://api.vercel.com"
-VERCEL_PROJECT_NAME = "infiapp-webui"
+VERCEL_PROJECT_NAME = "shalini-clinic-webui"
 VERCEL_AGENT_ROLE_NAME = f"vercel-{VERCEL_PROJECT_NAME}-agent-invoke"
 VERCEL_AGENT_POLICY_NAME = "invoke-external-agents"
+GOOGLE_AGENT_NAME = "clinic_agent"
+GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX = "shalini-clinic/clinic_agent/google"
 VERCEL_MANAGED_ENV_KEYS = {
     "AWS_REGION",
     "AWS_ROLE_ARN",
-    "INFIAPP_AGENT_BACKEND_MODE",
+    "CLINIC_ALLOWED_EMAILS",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "NEXTAUTH_SECRET",
+    "NEXTAUTH_URL",
+    "SHALINI_CLINIC_AGENT_BACKEND_MODE",
+}
+GOOGLE_AGENT_ENV_KEYS = {
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_TOKEN_SECRET_PREFIX",
+}
+VERCEL_CLI_OMITTED_ENV_KEYS = {
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "NEXTAUTH_SECRET",
+}
+VERCEL_ENCRYPTED_ENV_KEYS = {
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "NEXTAUTH_SECRET",
 }
 LAMBDA_HANDLER = "handler.lambda_handler"
 
@@ -216,7 +238,7 @@ def tables_for_agent(agent_name: str) -> list[dict[str, Any]]:
 
 def ensure_agent_role(agent_name: str) -> str:
     account_id = get_aws_account_id()
-    role_name = f"infiapp-{agent_name}-lambda-role"
+    role_name = f"shalini-clinic-{agent_name}-lambda-role"
     print(f"Ensuring Lambda IAM role for {agent_name}: {role_name}", flush=True)
     role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", role_name])
     if role_code != 0:
@@ -275,6 +297,24 @@ def ensure_agent_role(agent_name: str) -> str:
                 "Resource": table_arns,
             }
         )
+    token_secret_prefix = google_token_secret_prefix(agent_name)
+    if token_secret_prefix:
+        statements.append(
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "secretsmanager:CreateSecret",
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:PutSecretValue",
+                    "secretsmanager:UpdateSecret",
+                ],
+                "Resource": (
+                    f"arn:aws:secretsmanager:{os.environ['AWS_REGION']}:{account_id}:"
+                    f"secret:{token_secret_prefix}/*"
+                ),
+            }
+        )
     policy = {
         "Version": "2012-10-17",
         "Statement": statements,
@@ -287,7 +327,7 @@ def ensure_agent_role(agent_name: str) -> str:
             "--role-name",
             role_name,
             "--policy-name",
-            "infiapp-agent-owned-tables",
+            "shalini-clinic-agent-owned-tables",
             "--policy-document",
             json.dumps(policy),
         ]
@@ -350,6 +390,24 @@ def zip_agent(agent_dir: Path, output_path: Path) -> None:
         zip_directory(build_dir, output_path)
 
 
+def google_token_secret_prefix(agent_name: str) -> str:
+    if agent_name != GOOGLE_AGENT_NAME:
+        return ""
+    configured = os.environ.get("GOOGLE_TOKEN_SECRET_PREFIX", GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX)
+    return configured.strip().strip("/") or GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX
+
+
+def agent_environment_args(agent_name: str) -> list[str]:
+    if agent_name != GOOGLE_AGENT_NAME:
+        return []
+    variables = {
+        key: value
+        for key in sorted(GOOGLE_AGENT_ENV_KEYS)
+        if (value := os.environ.get(key))
+    }
+    return ["--environment", json.dumps({"Variables": variables})] if variables else []
+
+
 def deploy_agents() -> None:
     agent_dirs = iter_agent_dirs()
     log_section(f"Deploying Lambda agents ({len(agent_dirs)} spec(s))")
@@ -390,6 +448,7 @@ def deploy_agents() -> None:
                         str(spec["timeout_seconds"]),
                         "--ephemeral-storage",
                         f"Size={spec['ephemeral_storage_mb']}",
+                        *agent_environment_args(function_name),
                     ]
                 )
                 run(["aws", "lambda", "wait", "function-updated-v2", "--function-name", function_name])
@@ -414,6 +473,7 @@ def deploy_agents() -> None:
                         str(spec["timeout_seconds"]),
                         "--ephemeral-storage",
                         f"Size={spec['ephemeral_storage_mb']}",
+                        *agent_environment_args(function_name),
                         "--zip-file",
                         f"fileb://{zip_path}",
                     ]
@@ -583,7 +643,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
                 "--assume-role-policy-document",
                 json.dumps(trust_policy),
                 "--description",
-                f"OIDC role for Vercel project {VERCEL_PROJECT_NAME} to invoke external Infiapp agents.",
+                f"OIDC role for Vercel project {VERCEL_PROJECT_NAME} to invoke external Dr. Shalini's Clinic agents.",
             ]
         )
         role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])
@@ -679,10 +739,23 @@ def sync_vercel_oidc_env(vercel_token: str, vercel_team_id: str, values: dict[st
             body={
                 "key": key,
                 "value": value,
-                "type": "plain",
+                "type": "encrypted" if key in VERCEL_ENCRYPTED_ENV_KEYS else "plain",
                 "target": ["production"],
             },
         )
+
+
+def vercel_runtime_env(region: str, role_arn: str) -> dict[str, str]:
+    values = {
+        "AWS_REGION": region,
+        "AWS_ROLE_ARN": role_arn,
+        "SHALINI_CLINIC_AGENT_BACKEND_MODE": "aws_oidc",
+    }
+    for key in sorted(VERCEL_MANAGED_ENV_KEYS - values.keys()):
+        value = os.environ.get(key, "").strip()
+        if value:
+            values[key] = value
+    return values
 
 
 def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
@@ -692,15 +765,7 @@ def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
     team_slug = get_vercel_team_slug(vercel_token, vercel_team_id)
     ensure_vercel_project(vercel_token, vercel_team_id)
     role_arn = ensure_vercel_agent_role(account_id, region, team_slug)
-    sync_vercel_oidc_env(
-        vercel_token,
-        vercel_team_id,
-        {
-            "AWS_REGION": region,
-            "AWS_ROLE_ARN": role_arn,
-            "INFIAPP_AGENT_BACKEND_MODE": "aws_oidc",
-        },
-    )
+    sync_vercel_oidc_env(vercel_token, vercel_team_id, vercel_runtime_env(region, role_arn))
     print(f"Synced Vercel OIDC agent access for {VERCEL_PROJECT_NAME} with role {role_arn}.")
     return team_slug
 
@@ -717,6 +782,8 @@ def deploy_webui() -> None:
         raise RuntimeError("VERCEL_TEAM_ID must be set for WebUI deployment")
     vercel_team_slug = deploy_vercel_oidc_access(vercel_token, vercel_team_id)
     vercel_env = {**os.environ, "VERCEL_TOKEN": vercel_token, "VERCEL_TEAM_ID": vercel_team_id}
+    for key in VERCEL_CLI_OMITTED_ENV_KEYS:
+        vercel_env.pop(key, None)
     run(["npm", "ci"], cwd=WEBUI_DIR)
     run(
         [

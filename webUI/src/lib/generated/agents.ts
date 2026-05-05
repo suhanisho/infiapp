@@ -3,7 +3,7 @@
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 
-import { mockCallSampleAgent, type SampleAgentListMessagesInput, type SampleAgentListMessagesOutput, type SampleAgentStoreMessageInput, type SampleAgentStoreMessageOutput } from "./mockAgents";
+import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
 
 type AgentBackendMode = "mock" | "aws_oidc";
 
@@ -15,7 +15,7 @@ type LambdaEnvelope<T> = {
 let lambdaClient: LambdaClient | undefined;
 
 function getBackendMode(): AgentBackendMode {
-  const mode = process.env.INFIAPP_AGENT_BACKEND_MODE;
+  const mode = process.env.SHALINI_CLINIC_AGENT_BACKEND_MODE;
   if (mode === "mock" || mode === "aws_oidc") {
     return mode;
   }
@@ -24,7 +24,7 @@ function getBackendMode(): AgentBackendMode {
     return "mock";
   }
 
-  throw new Error("INFIAPP_AGENT_BACKEND_MODE must be set to mock or aws_oidc.");
+  throw new Error("SHALINI_CLINIC_AGENT_BACKEND_MODE must be set to mock or aws_oidc.");
 }
 
 function getLambdaClient(): LambdaClient {
@@ -81,18 +81,74 @@ async function invokeLambda<T>(functionName: string, payload: object): Promise<T
   return parseLambdaPayload<T>(functionName, payloadText);
 }
 
-export async function callSampleAgentListMessages(input: SampleAgentListMessagesInput): Promise<SampleAgentListMessagesOutput> {
-  const payload: { action: "list_messages" } & SampleAgentListMessagesInput = { action: "list_messages", ...input };
+export async function callClinicAgentApproveAction(input: ClinicAgentApproveActionInput): Promise<ClinicAgentApproveActionOutput> {
+  const payload: { action: "approve_action" } & ClinicAgentApproveActionInput = { action: "approve_action", ...input };
   if (getBackendMode() === "mock") {
-    return mockCallSampleAgent(payload) as Promise<SampleAgentListMessagesOutput>;
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentApproveActionOutput>;
   }
-  return invokeLambda<SampleAgentListMessagesOutput>("sample_agent", payload);
+  return invokeLambda<ClinicAgentApproveActionOutput>("clinic_agent", payload);
 }
 
-export async function callSampleAgentStoreMessage(input: SampleAgentStoreMessageInput): Promise<SampleAgentStoreMessageOutput> {
-  const payload: { action: "store_message" } & SampleAgentStoreMessageInput = { action: "store_message", ...input };
+export async function callClinicAgentConnectGoogleWorkspace(input: ClinicAgentConnectGoogleWorkspaceInput): Promise<ClinicAgentConnectGoogleWorkspaceOutput> {
+  const payload: { action: "connect_google_workspace" } & ClinicAgentConnectGoogleWorkspaceInput = { action: "connect_google_workspace", ...input };
   if (getBackendMode() === "mock") {
-    return mockCallSampleAgent(payload) as Promise<SampleAgentStoreMessageOutput>;
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentConnectGoogleWorkspaceOutput>;
   }
-  return invokeLambda<SampleAgentStoreMessageOutput>("sample_agent", payload);
+  return invokeLambda<ClinicAgentConnectGoogleWorkspaceOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListActions(input: ClinicAgentListActionsInput): Promise<ClinicAgentListActionsOutput> {
+  const payload: { action: "list_actions" } & ClinicAgentListActionsInput = { action: "list_actions", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListActionsOutput>;
+  }
+  return invokeLambda<ClinicAgentListActionsOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListIntegrations(input: ClinicAgentListIntegrationsInput): Promise<ClinicAgentListIntegrationsOutput> {
+  const payload: { action: "list_integrations" } & ClinicAgentListIntegrationsInput = { action: "list_integrations", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListIntegrationsOutput>;
+  }
+  return invokeLambda<ClinicAgentListIntegrationsOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListPatients(input: ClinicAgentListPatientsInput): Promise<ClinicAgentListPatientsOutput> {
+  const payload: { action: "list_patients" } & ClinicAgentListPatientsInput = { action: "list_patients", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListPatientsOutput>;
+  }
+  return invokeLambda<ClinicAgentListPatientsOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListSchedule(input: ClinicAgentListScheduleInput): Promise<ClinicAgentListScheduleOutput> {
+  const payload: { action: "list_schedule" } & ClinicAgentListScheduleInput = { action: "list_schedule", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListScheduleOutput>;
+  }
+  return invokeLambda<ClinicAgentListScheduleOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListSettings(input: ClinicAgentListSettingsInput): Promise<ClinicAgentListSettingsOutput> {
+  const payload: { action: "list_settings" } & ClinicAgentListSettingsInput = { action: "list_settings", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListSettingsOutput>;
+  }
+  return invokeLambda<ClinicAgentListSettingsOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentScanGmailInbox(input: ClinicAgentScanGmailInboxInput): Promise<ClinicAgentScanGmailInboxOutput> {
+  const payload: { action: "scan_gmail_inbox" } & ClinicAgentScanGmailInboxInput = { action: "scan_gmail_inbox", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentScanGmailInboxOutput>;
+  }
+  return invokeLambda<ClinicAgentScanGmailInboxOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentSyncGoogleCalendar(input: ClinicAgentSyncGoogleCalendarInput): Promise<ClinicAgentSyncGoogleCalendarOutput> {
+  const payload: { action: "sync_google_calendar" } & ClinicAgentSyncGoogleCalendarInput = { action: "sync_google_calendar", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentSyncGoogleCalendarOutput>;
+  }
+  return invokeLambda<ClinicAgentSyncGoogleCalendarOutput>("clinic_agent", payload);
 }

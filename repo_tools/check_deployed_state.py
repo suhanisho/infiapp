@@ -284,7 +284,7 @@ def check_vercel_oidc_access() -> tuple[list[str], list[ResourceCheck]]:
     expected_env = {
         "AWS_REGION": region,
         "AWS_ROLE_ARN": role_arn,
-        "INFIAPP_AGENT_BACKEND_MODE": "aws_oidc",
+        "SHALINI_CLINIC_AGENT_BACKEND_MODE": "aws_oidc",
     }
     envs = list_vercel_project_envs(vercel_token, vercel_team_id)
     for key, expected_value in expected_env.items():

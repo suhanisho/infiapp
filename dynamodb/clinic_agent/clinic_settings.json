@@ -1,0 +1,18 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "clinic_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "setting_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "clinic_id": "String",
+    "data": "Map",
+    "setting_id": "String",
+    "updated_at": "String"
+  }
+}

@@ -1,18 +1,26 @@
 import { expect, test } from "@playwright/test";
 
-test("home page calls backend api", async ({ page }) => {
+test("clinic app stores approved actions without external side effects", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Hi from infiapp" })).toBeVisible();
-  await page.getByRole("textbox", { name: "Message" }).fill("echo this message");
-  await page.getByRole("button", { name: "Store message" }).click();
-  await expect(page.getByText("Stored echo this message")).toBeVisible();
-  await expect(page.getByRole("list", { name: "Stored messages" })).toContainText("echo this message");
-  await page.getByRole("button", { name: "List messages" }).click();
-  await expect(page.getByRole("list", { name: "Stored messages" })).toContainText("echo this message");
-  await expect(page).toHaveScreenshot("home.png", {
-    fullPage: true,
-    mask: [page.locator("time")],
-    maskColor: "#f8f6ef",
-    maxDiffPixelRatio: 0.08,
-  });
+  await page.getByRole("button", { name: "Open local demo" }).click();
+  await expect(page.getByRole("heading", { name: /items need review/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /Rachel Davies/i }).click();
+  await expect(page.getByText("Draft reply")).toBeVisible();
+  await page.getByRole("button", { name: "Approve and store" }).click();
+  await expect(page.getByText("Doctor approved and stored this action.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Patients" }).click();
+  await expect(page.getByRole("heading", { name: "Patients" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search" }).fill("Rachel");
+  await expect(page.getByRole("button", { name: /Rachel Davies/i })).toBeVisible();
+
+  await page.getByRole("button", { name: "Schedule" }).click();
+  await expect(page.getByRole("heading", { name: "This Week" })).toBeVisible();
+  await expect(page.getByText("Read only")).toBeVisible();
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByRole("heading", { name: "Google Workspace" })).toBeVisible();
+  await expect(page.getByText("Google Calendar")).toBeVisible();
+  await expect(page.getByText("Gmail")).toBeVisible();
 });

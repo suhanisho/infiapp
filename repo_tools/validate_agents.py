@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate simplified Infiapp Lambda agent specs."""
+"""Validate simplified Dr. Shalini's Clinic Lambda agent specs."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Command runner for Infiapp repository tooling."""
+"""Command runner for Dr. Shalini's Clinic repository tooling."""
 
 from __future__ import annotations
 
@@ -69,9 +69,9 @@ def rename_app(app_name: str, app_title: str | None = None) -> None:
         except UnicodeDecodeError:
             continue
         updated = (
-            text.replace("INFIAPP", env_prefix)
-            .replace("Infiapp", title)
-            .replace("infiapp", app_name)
+            text.replace("SHALINI_CLINIC", env_prefix)
+            .replace("Dr. Shalini's Clinic", title)
+            .replace("shalini-clinic", app_name)
         )
         if updated != text:
             path.write_text(updated)
@@ -119,7 +119,7 @@ def typecheck_agents() -> None:
         "--cache-dir",
         str(cache_dir),
     ]
-    run(python_command(*mypy_base_args, "response.py", "generated"), cwd=shared_utils_dir)
+    run(python_command(*mypy_base_args, "response.py", "google_workspace.py", "generated"), cwd=shared_utils_dir)
     shared_utils_test_dir = shared_utils_dir / "test"
     if shared_utils_test_dir.exists():
         print("==> Type checking shared utility tests", flush=True)
@@ -178,7 +178,7 @@ COMMANDS = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Infiapp repository tooling")
+    parser = argparse.ArgumentParser(description="Run Dr. Shalini's Clinic repository tooling")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command in sorted(COMMANDS):

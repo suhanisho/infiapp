@@ -1,0 +1,29 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "clinic_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "integration_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "account_email": "String",
+    "calendar_id": "String",
+    "calendar_sync_token": "String",
+    "clinic_id": "String",
+    "connected_at": "String",
+    "gmail_history_id": "String",
+    "integration_id": "String",
+    "last_error": "String",
+    "last_sync_at": "String",
+    "provider": "String",
+    "required_scopes": "List",
+    "status": "String",
+    "token_secret_id": "String",
+    "updated_at": "String",
+    "write_mode": "String"
+  }
+}

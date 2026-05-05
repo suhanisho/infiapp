@@ -1,1 +1,1 @@
-"""Repository automation for Infiapp."""
+"""Repository automation for Dr. Shalini's Clinic."""

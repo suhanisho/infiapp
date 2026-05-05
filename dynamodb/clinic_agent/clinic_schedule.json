@@ -1,0 +1,31 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "clinic_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "event_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "appointment_type": "String",
+    "clinic_id": "String",
+    "day_key": "String",
+    "day_label": "String",
+    "day_type": "String",
+    "end_time": "String",
+    "external_calendar_id": "String",
+    "external_etag": "String",
+    "external_event_id": "String",
+    "event_id": "String",
+    "last_synced_at": "String",
+    "patient_id": "String",
+    "patient_name": "String",
+    "sort_order": "Number",
+    "source_provider": "String",
+    "start_time": "String",
+    "status": "String"
+  }
+}

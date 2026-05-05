@@ -1,0 +1,24 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "clinic_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "patient_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "clinic_id": "String",
+    "email": "String",
+    "last_visit": "String",
+    "name": "String",
+    "next_appt": "String",
+    "notes": "String",
+    "patient_id": "String",
+    "phone": "String",
+    "status": "String",
+    "visits": "Number"
+  }
+}

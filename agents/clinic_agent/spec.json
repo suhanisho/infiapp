@@ -1,0 +1,287 @@
+{
+  "description": "External Lambda agent for Dr. Shalini's Clinic action queue, patients, schedule, and settings.",
+  "connectivity": "external",
+  "memory_mb": 128,
+  "timeout_seconds": 30,
+  "ephemeral_storage_mb": 512,
+  "api_context": [
+    {
+      "call": "approve_action",
+      "description": "Records explicit doctor approval for an action and stores it as completed without sending messages or updating calendars.",
+      "input": {
+        "actionId": "String",
+        "approvedBy?": "String",
+        "finalMessage?": "String"
+      },
+      "output": {
+        "action": {
+          "actionId": "String",
+          "actionType": "String",
+          "approvedAt": "String | Null",
+          "approvedBy": "String | Null",
+          "completedAt": "String | Null",
+          "completionNote": "String | Null",
+          "createdAt": "String",
+          "draftMessage": "String | Null",
+          "externalDraftId": "String | Null",
+          "externalSentMessageId": "String | Null",
+          "finalMessage": "String | Null",
+          "patientId": "String | Null",
+          "patientName": "String | Null",
+          "priority": "String",
+          "sourceMessage": "String | Null",
+          "sourceMessageId": "String | Null",
+          "sourceProvider": "String",
+          "sourceSummary": "String",
+          "sourceThreadId": "String | Null",
+          "status": "String",
+          "timeLabel": "String",
+          "updatedAt": "String"
+        },
+        "message": "String"
+      }
+    },
+    {
+      "call": "connect_google_workspace",
+      "description": "Stores Auth.js-verified Google token material in a secret store and records safe Google Workspace connection metadata.",
+      "input": {
+        "accountEmail": "String",
+        "tokenResponse": "Map"
+      },
+      "output": {
+        "integrations": [
+          {
+            "accountEmail": "String | Null",
+            "calendarId": "String | Null",
+            "connectedAt": "String | Null",
+            "integrationId": "String",
+            "lastError": "String | Null",
+            "lastSyncAt": "String | Null",
+            "provider": "String",
+            "requiredScopes": ["String"],
+            "status": "String",
+            "writeMode": "String"
+          }
+        ],
+        "message": "String"
+      }
+    },
+    {
+      "call": "list_actions",
+      "description": "Lists durable action queue records, including completed records when requested for future validation.",
+      "input": {
+        "includeCompleted?": "Boolean"
+      },
+      "output": {
+        "actions": [
+          {
+            "actionId": "String",
+            "actionType": "String",
+            "approvedAt": "String | Null",
+            "approvedBy": "String | Null",
+            "completedAt": "String | Null",
+            "completionNote": "String | Null",
+            "createdAt": "String",
+            "draftMessage": "String | Null",
+            "externalDraftId": "String | Null",
+            "externalSentMessageId": "String | Null",
+            "finalMessage": "String | Null",
+            "patientId": "String | Null",
+            "patientName": "String | Null",
+            "priority": "String",
+            "sourceMessage": "String | Null",
+            "sourceMessageId": "String | Null",
+            "sourceProvider": "String",
+            "sourceSummary": "String",
+            "sourceThreadId": "String | Null",
+            "status": "String",
+            "timeLabel": "String",
+            "updatedAt": "String"
+          }
+        ]
+      }
+    },
+    {
+      "call": "list_patients",
+      "description": "Lists patient directory records used by the doctor-facing app.",
+      "input": {},
+      "output": {
+        "patients": [
+          {
+            "email": "String",
+            "lastVisit": "String",
+            "name": "String",
+            "nextAppt": "String",
+            "notes": "String",
+            "patientId": "String",
+            "phone": "String",
+            "status": "String",
+            "visits": "Number"
+          }
+        ]
+      }
+    },
+    {
+      "call": "list_integrations",
+      "description": "Lists Google Workspace integration status, required scopes, and safety modes.",
+      "input": {},
+      "output": {
+        "integrations": [
+          {
+            "accountEmail": "String | Null",
+            "calendarId": "String | Null",
+            "connectedAt": "String | Null",
+            "integrationId": "String",
+            "lastError": "String | Null",
+            "lastSyncAt": "String | Null",
+            "provider": "String",
+            "requiredScopes": ["String"],
+            "status": "String",
+            "writeMode": "String"
+          }
+        ],
+        "safety": {
+          "calendarWrites": "String",
+          "gmailSends": "String",
+          "tokenStorage": "String"
+        }
+      }
+    },
+    {
+      "call": "list_schedule",
+      "description": "Lists the weekly clinic schedule without writing to an external calendar.",
+      "input": {},
+      "output": {
+        "days": [
+          {
+            "dayKey": "String",
+            "dayLabel": "String",
+            "dayType": "String",
+            "events": [
+              {
+                "appointmentType": "String",
+                "endTime": "String",
+                "externalCalendarId": "String | Null",
+                "externalEventId": "String | Null",
+                "eventId": "String",
+                "lastSyncedAt": "String | Null",
+                "patientId": "String | Null",
+                "patientName": "String",
+                "sourceProvider": "String",
+                "startTime": "String",
+                "status": "String"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "call": "list_settings",
+      "description": "Lists clinic availability, appointment types, and operating preferences.",
+      "input": {},
+      "output": {
+        "appointmentTypes": [
+          {
+            "color": "String",
+            "duration": "String",
+            "name": "String"
+          }
+        ],
+        "availabilityRules": [
+          {
+            "day": "String",
+            "enabled": "Boolean",
+            "hours": "String",
+            "type": "String"
+          }
+        ],
+        "preferences": [
+          {
+            "label": "String",
+            "value": "String"
+          }
+        ]
+      }
+    },
+    {
+      "call": "scan_gmail_inbox",
+      "description": "Reads Gmail message candidates and prepares in-app action drafts without sending, labeling, or creating Gmail drafts.",
+      "input": {},
+      "output": {
+        "actions": [
+          {
+            "actionId": "String",
+            "actionType": "String",
+            "approvedAt": "String | Null",
+            "approvedBy": "String | Null",
+            "completedAt": "String | Null",
+            "completionNote": "String | Null",
+            "createdAt": "String",
+            "draftMessage": "String | Null",
+            "externalDraftId": "String | Null",
+            "externalSentMessageId": "String | Null",
+            "finalMessage": "String | Null",
+            "patientId": "String | Null",
+            "patientName": "String | Null",
+            "priority": "String",
+            "sourceMessage": "String | Null",
+            "sourceMessageId": "String | Null",
+            "sourceProvider": "String",
+            "sourceSummary": "String",
+            "sourceThreadId": "String | Null",
+            "status": "String",
+            "timeLabel": "String",
+            "updatedAt": "String"
+          }
+        ],
+        "externalWrites": "Number",
+        "message": "String",
+        "messagesScanned": "Number",
+        "proposedActions": "Number",
+        "sourceOfTruth": "String",
+        "status": "String",
+        "writeMode": "String"
+      }
+    },
+    {
+      "call": "sync_google_calendar",
+      "description": "Reads Google Calendar as the source of truth and refreshes the local schedule cache without writing to Google Calendar.",
+      "input": {},
+      "output": {
+        "appointmentsCached": "Number",
+        "days": [
+          {
+            "dayKey": "String",
+            "dayLabel": "String",
+            "dayType": "String",
+            "events": [
+              {
+                "appointmentType": "String",
+                "endTime": "String",
+                "externalCalendarId": "String | Null",
+                "externalEventId": "String | Null",
+                "eventId": "String",
+                "lastSyncedAt": "String | Null",
+                "patientId": "String | Null",
+                "patientName": "String",
+                "sourceProvider": "String",
+                "startTime": "String",
+                "status": "String"
+              }
+            ]
+          }
+        ],
+        "eventsRead": "Number",
+        "externalWrites": "Number",
+        "message": "String",
+        "sourceOfTruth": "String",
+        "status": "String",
+        "writeMode": "String"
+      }
+    }
+  ],
+  "required_dependencies": [
+    "boto3"
+  ]
+}
