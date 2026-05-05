@@ -9,7 +9,6 @@ permissions:
 jobs:
   deploy:
     name: Deploy Dr. Shalini's Clinic
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
