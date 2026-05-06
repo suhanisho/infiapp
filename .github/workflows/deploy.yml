@@ -8,8 +8,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Infiapp
-    if: github.ref == 'refs/heads/main'
+    name: Deploy Dr. Shalini's Clinic
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -17,6 +16,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+      NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+      CLINIC_ALLOWED_EMAILS: ${{ vars.CLINIC_ALLOWED_EMAILS }}
+      GOOGLE_TOKEN_SECRET_PREFIX: ${{ vars.GOOGLE_TOKEN_SECRET_PREFIX }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
