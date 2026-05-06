@@ -14,7 +14,7 @@ import os
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from email.utils import parseaddr, parsedate_to_datetime
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from generated.dynamodb import (
@@ -55,6 +55,15 @@ DEFAULT_SLOT_SUGGESTIONS = 3
 SLOT_SEARCH_DAYS = 14
 SLOT_STEP_MINUTES = 30
 MIN_BOOKING_NOTICE_HOURS = 2
+WEEKDAY_ALIASES = {
+    0: ("monday", "mondays", "mon"),
+    1: ("tuesday", "tuesdays", "tue", "tues"),
+    2: ("wednesday", "wednesdays", "wed"),
+    3: ("thursday", "thursdays", "thu", "thur", "thurs"),
+    4: ("friday", "fridays", "fri"),
+    5: ("saturday", "saturdays", "sat"),
+    6: ("sunday", "sundays", "sun"),
+}
 CLINIC_MESSAGE_KEYWORDS = (
     "appointment",
     "booking",
@@ -71,6 +80,15 @@ CLINIC_MESSAGE_KEYWORDS = (
     "clinic",
     "patient",
 )
+
+
+class SlotConstraints(TypedDict):
+    preferred_weekdays: set[int]
+    earliest_date: date | None
+    latest_date: date | None
+    daily_start: time | None
+    daily_end: time | None
+    notes: list[str]
 
 SEED_ACTIONS: list[ClinicActionsItem] = [
     {
@@ -1098,27 +1116,27 @@ def _parse_time_value(value: str) -> time | None:
     return None
 
 
+def _ampm_suffix(value: str) -> str:
+    match = re.search(r"\b(am|pm)\b", value, flags=re.IGNORECASE)
+    return f" {match.group(1).upper()}" if match else ""
+
+
 def _parse_hours_range(hours: str) -> tuple[time, time] | None:
     parts = re.split(r"\s+-\s+", hours.strip(), maxsplit=1)
     if len(parts) != 2:
         return None
-    start = _parse_time_value(parts[0])
-    end = _parse_time_value(parts[1])
+    start_text = parts[0]
+    end_text = parts[1]
+    if not _ampm_suffix(start_text) and _ampm_suffix(end_text):
+        start_text = f"{start_text}{_ampm_suffix(end_text)}"
+    start = _parse_time_value(start_text)
+    end = _parse_time_value(end_text)
     if start is None or end is None or end <= start:
         return None
     return start, end
 
 
 def _weekday_availability() -> dict[int, tuple[time, time]]:
-    weekday_by_name = {
-        "monday": 0,
-        "tuesday": 1,
-        "wednesday": 2,
-        "thursday": 3,
-        "friday": 4,
-        "saturday": 5,
-        "sunday": 6,
-    }
     settings = {item["setting_id"]: item for item in _list_setting_items()}
     rules = _setting_items("availability_rules", settings)
     availability: dict[int, tuple[time, time]] = {}
@@ -1130,7 +1148,7 @@ def _weekday_availability() -> dict[int, tuple[time, time]]:
         parsed_hours = _parse_hours_range(hours)
         if not enabled or parsed_hours is None or rule_type == "nhs":
             continue
-        weekday = weekday_by_name.get(day)
+        weekday = next((index for index, aliases in WEEKDAY_ALIASES.items() if day in aliases), None)
         if weekday is not None:
             availability[weekday] = parsed_hours
 
@@ -1138,6 +1156,33 @@ def _weekday_availability() -> dict[int, tuple[time, time]]:
         return availability
     default_start, default_end = time(9, 0), time(17, 0)
     return {weekday: (default_start, default_end) for weekday in range(5)}
+
+
+def _preference_items() -> list[dict[str, Any]]:
+    settings = {item["setting_id"]: item for item in _list_setting_items()}
+    return _setting_items("preferences", settings)
+
+
+def _clinic_buffer_minutes() -> int:
+    for preference in _preference_items():
+        label = str(preference.get("label", "")).strip().lower()
+        value = str(preference.get("value", "")).strip()
+        if "buffer" not in label:
+            continue
+        match = re.search(r"\d+", value)
+        if match:
+            return int(match.group(0))
+    return 0
+
+
+def _clinic_lunch_window() -> tuple[time, time] | None:
+    for preference in _preference_items():
+        label = str(preference.get("label", "")).strip().lower()
+        value = str(preference.get("value", "")).strip()
+        if "lunch" not in label:
+            continue
+        return _parse_hours_range(value)
+    return None
 
 
 def _request_appointment_details(text: str) -> tuple[str, int]:
@@ -1151,6 +1196,117 @@ def _request_appointment_details(text: str) -> tuple[str, int]:
     if "consultation" in lowered or "referral" in lowered or "appointment" in lowered or "book" in lowered:
         return "Initial Consultation", 45
     return "Appointment", 30
+
+
+def _empty_slot_constraints() -> SlotConstraints:
+    return {
+        "preferred_weekdays": set(),
+        "earliest_date": None,
+        "latest_date": None,
+        "daily_start": None,
+        "daily_end": None,
+        "notes": [],
+    }
+
+
+def _merge_daily_start(current: time | None, candidate: time) -> time:
+    return max(current, candidate) if current is not None else candidate
+
+
+def _merge_daily_end(current: time | None, candidate: time) -> time:
+    return min(current, candidate) if current is not None else candidate
+
+
+def _text_hour_to_time(raw_hour: str, suffix: str) -> time | None:
+    try:
+        hour = int(raw_hour)
+    except ValueError:
+        return None
+    if hour < 1 or hour > 12:
+        return None
+    normalized_suffix = suffix.strip().lower()
+    if normalized_suffix == "pm" and hour != 12:
+        hour += 12
+    elif normalized_suffix == "am" and hour == 12:
+        hour = 0
+    elif not normalized_suffix and 1 <= hour <= 7:
+        hour += 12
+    return time(hour, 0)
+
+
+def _weekday_mentions(text: str) -> set[int]:
+    weekdays: set[int] = set()
+    for weekday, aliases in WEEKDAY_ALIASES.items():
+        if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases):
+            weekdays.add(weekday)
+    if "weekend" in text:
+        weekdays.update({5, 6})
+    if "weekday" in text:
+        weekdays.update({0, 1, 2, 3, 4})
+    return weekdays
+
+
+def _slot_constraints_from_text(text: str) -> SlotConstraints:
+    lowered = text.lower()
+    zone = _clinic_timezone()
+    today = datetime.now(zone).date()
+    constraints = _empty_slot_constraints()
+    constraints["preferred_weekdays"] = _weekday_mentions(lowered)
+
+    if "tomorrow" in lowered:
+        target_date = today + timedelta(days=1)
+        constraints["earliest_date"] = target_date
+        constraints["latest_date"] = target_date
+    elif "next week" in lowered:
+        start_of_next_week = today + timedelta(days=(7 - today.weekday()))
+        constraints["earliest_date"] = start_of_next_week
+        constraints["latest_date"] = start_of_next_week + timedelta(days=6)
+        constraints["notes"].append("next week")
+    elif "this week" in lowered:
+        constraints["earliest_date"] = today
+        constraints["latest_date"] = today + timedelta(days=(6 - today.weekday()))
+
+    if "morning" in lowered:
+        constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], time(9, 0))
+        constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], time(12, 0))
+        constraints["notes"].append("morning")
+    if "afternoon" in lowered:
+        constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], time(12, 0))
+        constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], time(17, 0))
+        constraints["notes"].append("afternoon")
+    if "evening" in lowered:
+        constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], time(17, 0))
+        constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], time(20, 0))
+        constraints["notes"].append("evening")
+    if "lunchtime" in lowered or "lunch time" in lowered:
+        constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], time(12, 0))
+        constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], time(14, 0))
+        constraints["notes"].append("lunchtime")
+
+    between_match = re.search(r"\bbetween\s+(\d{1,2})(?:\s*(am|pm))?\s+(?:and|to|-)\s+(\d{1,2})(?:\s*(am|pm))?", lowered)
+    if between_match:
+        start_suffix = between_match.group(2) or between_match.group(4) or ""
+        end_suffix = between_match.group(4) or between_match.group(2) or ""
+        start_time = _text_hour_to_time(between_match.group(1), start_suffix)
+        end_time = _text_hour_to_time(between_match.group(3), end_suffix)
+        if start_time is not None and end_time is not None and end_time > start_time:
+            constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], start_time)
+            constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], end_time)
+
+    for after_match in re.finditer(r"\bafter\s+(\d{1,2})(?:\s*(am|pm))?", lowered):
+        start_time = _text_hour_to_time(after_match.group(1), after_match.group(2) or "")
+        if start_time is not None:
+            constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], start_time)
+
+    for before_match in re.finditer(r"\bbefore\s+(noon|midday|(\d{1,2})(?:\s*(am|pm))?)", lowered):
+        if before_match.group(1) in {"noon", "midday"}:
+            end_time = time(12, 0)
+        else:
+            end_time = _text_hour_to_time(before_match.group(2) or "", before_match.group(3) or "")
+        if end_time is not None:
+            constraints["daily_end"] = _merge_daily_end(constraints["daily_end"], end_time)
+
+    return constraints
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -1228,30 +1384,59 @@ def _suggest_free_slot_labels(
     *,
     appointment_kind: str,
     duration_minutes: int,
+    constraints: SlotConstraints | None = None,
     limit: int = DEFAULT_SLOT_SUGGESTIONS,
 ) -> list[str]:
     zone = _clinic_timezone()
     now = datetime.now(zone)
     earliest_start = _round_up_to_step(now + timedelta(hours=MIN_BOOKING_NOTICE_HOURS), SLOT_STEP_MINUTES)
+    active_constraints = constraints or _empty_slot_constraints()
     availability = _weekday_availability()
+    buffer_delta = timedelta(minutes=_clinic_buffer_minutes())
+    lunch_window = _clinic_lunch_window()
     busy_windows = _busy_schedule_windows()
     slots: list[str] = []
 
     for day_offset in range(SLOT_SEARCH_DAYS):
         current_day = (now + timedelta(days=day_offset)).date()
+        if active_constraints["earliest_date"] is not None and current_day < active_constraints["earliest_date"]:
+            continue
+        if active_constraints["latest_date"] is not None and current_day > active_constraints["latest_date"]:
+            continue
+        if (
+            active_constraints["preferred_weekdays"]
+            and current_day.weekday() not in active_constraints["preferred_weekdays"]
+        ):
+            continue
+
         hours = availability.get(current_day.weekday())
         if hours is None:
             continue
 
-        day_start = datetime.combine(current_day, hours[0], tzinfo=zone)
-        day_end = datetime.combine(current_day, hours[1], tzinfo=zone)
+        start_time = hours[0]
+        end_time = hours[1]
+        if active_constraints["daily_start"] is not None:
+            start_time = max(start_time, active_constraints["daily_start"])
+        if active_constraints["daily_end"] is not None:
+            end_time = min(end_time, active_constraints["daily_end"])
+        if end_time <= start_time:
+            continue
+
+        day_start = datetime.combine(current_day, start_time, tzinfo=zone)
+        day_end = datetime.combine(current_day, end_time, tzinfo=zone)
         cursor = max(day_start, earliest_start) if current_day == earliest_start.date() else day_start
         cursor = _round_up_to_step(cursor, SLOT_STEP_MINUTES)
         day_busy_windows = [
-            (max(start_at, day_start), min(end_at, day_end))
+            (max(start_at - buffer_delta, day_start), min(end_at + buffer_delta, day_end))
             for start_at, end_at in busy_windows
-            if start_at < day_end and end_at > day_start
+            if start_at - buffer_delta < day_end and end_at + buffer_delta > day_start
         ]
+        if lunch_window is not None:
+            lunch_start = datetime.combine(current_day, lunch_window[0], tzinfo=zone)
+            lunch_end = datetime.combine(current_day, lunch_window[1], tzinfo=zone)
+            if lunch_start < day_end and lunch_end > day_start:
+                day_busy_windows.append((max(lunch_start, day_start), min(lunch_end, day_end)))
+        day_busy_windows.sort(key=lambda window: window[0])
 
         for busy_start, busy_end in [*day_busy_windows, (day_end, day_end)]:
             while cursor + timedelta(minutes=duration_minutes) <= busy_start:
@@ -1316,9 +1501,15 @@ def _gmail_message_to_action_item(
     subject = headers.get("subject", "").strip()
     summary = _truncate(subject or snippet or "New Gmail message", 120)
     source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
-    action_type, priority = _infer_gmail_action_type(f"{subject} {snippet}")
-    appointment_kind, duration_minutes = _request_appointment_details(f"{subject} {snippet}")
-    slot_labels = _suggest_free_slot_labels(appointment_kind=appointment_kind, duration_minutes=duration_minutes)
+    request_text = f"{subject} {snippet}"
+    action_type, priority = _infer_gmail_action_type(request_text)
+    appointment_kind, duration_minutes = _request_appointment_details(request_text)
+    constraints = _slot_constraints_from_text(request_text)
+    slot_labels = _suggest_free_slot_labels(
+        appointment_kind=appointment_kind,
+        duration_minutes=duration_minutes,
+        constraints=constraints,
+    )
     created_at = _gmail_message_datetime(message, headers)
     thread_id = message.get("threadId")
     localized = created_at.astimezone(_clinic_timezone())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable
+from datetime import datetime, time, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 import sys
@@ -213,6 +214,45 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(duration_minutes, 15)
         self.assertIn("Monday 11 May", draft)
         self.assertIn("Please let me know which option works best", draft)
+
+    def test_patient_text_constraints_capture_weekdays_and_time_window(self) -> None:
+        constraints = handler_module._slot_constraints_from_text(
+            "Monday or Tuesday afternoons next week would be ideal."
+        )
+
+        self.assertEqual(constraints["preferred_weekdays"], {0, 1})
+        self.assertEqual(constraints["daily_start"], time(12, 0))
+        self.assertEqual(constraints["daily_end"], time(17, 0))
+        self.assertIsNotNone(constraints["earliest_date"])
+        self.assertIsNotNone(constraints["latest_date"])
+
+    def test_slot_suggestions_respect_patient_constraints(self) -> None:
+        zone = handler_module._clinic_timezone()
+        target_date = datetime.now(zone).date() + timedelta(days=3)
+        constraints = handler_module._empty_slot_constraints()
+        constraints["preferred_weekdays"] = {target_date.weekday()}
+        constraints["earliest_date"] = target_date
+        constraints["latest_date"] = target_date
+        constraints["daily_start"] = time(14, 0)
+        constraints["daily_end"] = time(17, 0)
+
+        with (
+            patch.object(handler_module, "_weekday_availability", return_value={target_date.weekday(): (time(9, 0), time(17, 0))}),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+            patch.object(handler_module, "_clinic_lunch_window", return_value=None),
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+        ):
+            slots = handler_module._suggest_free_slot_labels(
+                appointment_kind="Meet & Greet",
+                duration_minutes=15,
+                constraints=constraints,
+                limit=2,
+            )
+
+        expected_day = f"{target_date:%A} {target_date.day} {target_date:%b}"
+        self.assertEqual(len(slots), 2)
+        self.assertTrue(all(expected_day in slot for slot in slots))
+        self.assertIn("2:00 PM", slots[0])
 
     def test_connect_google_workspace_stores_metadata_without_returning_tokens(self) -> None:
         token_response = {

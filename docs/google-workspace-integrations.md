@@ -35,7 +35,9 @@ read-first and approval-gated.
 - `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail metadata and
   snippets matching clinic keywords, and prepares in-app action drafts. For
   scheduling requests such as meet-and-greet or initial consultation messages,
-  draft replies include available slots from the local Google Calendar cache.
+  draft replies include available slots from the local Google Calendar cache,
+  filtered by patient preferences in the email such as weekdays, next week,
+  morning/afternoon, or after/before time constraints.
 
 ## Google scopes
 
