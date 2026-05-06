@@ -64,7 +64,7 @@ class FakeGoogleClient:
                 "id": "gmail-message-live-1",
                 "threadId": "gmail-thread-live-1",
                 "internalDate": "1778067600000",
-                "snippet": "Could I book an appointment next week?",
+                "snippet": "Could I book an appointment with Dr Shalini next week?",
                 "payload": {
                     "headers": [
                         {"name": "From", "value": "Rachel Davies <rachel.d@gmail.com>"},
@@ -213,7 +213,7 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(appointment_kind, "Meet & Greet")
         self.assertEqual(duration_minutes, 15)
         self.assertIn("Monday 11 May", draft)
-        self.assertIn("Please let me know which option works best", draft)
+        self.assertIn("what exact time within one of these windows", draft)
 
     def test_patient_text_constraints_capture_weekdays_and_time_window(self) -> None:
         constraints = handler_module._slot_constraints_from_text(
@@ -225,6 +225,20 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(constraints["daily_end"], time(17, 0))
         self.assertIsNotNone(constraints["earliest_date"])
         self.assertIsNotNone(constraints["latest_date"])
+
+    def test_non_patient_marketing_email_is_ignored(self) -> None:
+        headers = {
+            "from": "Newsletter <newsletter@example.com>",
+            "subject": "Book your product demo appointment",
+        }
+
+        self.assertFalse(
+            handler_module._is_clinic_message(
+                headers=headers,
+                snippet="Limited time offer. Unsubscribe here.",
+                patient_by_email={},
+            )
+        )
 
     def test_slot_suggestions_respect_patient_constraints(self) -> None:
         zone = handler_module._clinic_timezone()
@@ -250,9 +264,9 @@ class ClinicAgentTest(unittest.TestCase):
             )
 
         expected_day = f"{target_date:%A} {target_date.day} {target_date:%b}"
-        self.assertEqual(len(slots), 2)
+        self.assertEqual(len(slots), 1)
         self.assertTrue(all(expected_day in slot for slot in slots))
-        self.assertIn("2:00 PM", slots[0])
+        self.assertIn("between 2:00 PM and 5:00 PM", slots[0])
 
     def test_connect_google_workspace_stores_metadata_without_returning_tokens(self) -> None:
         token_response = {

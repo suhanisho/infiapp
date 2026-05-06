@@ -80,6 +80,77 @@ CLINIC_MESSAGE_KEYWORDS = (
     "clinic",
     "patient",
 )
+NON_PATIENT_SENDER_MARKERS = (
+    "no-reply",
+    "noreply",
+    "newsletter",
+    "marketing",
+    "updates",
+    "notifications",
+    "donotreply",
+    "do-not-reply",
+)
+NON_PATIENT_TEXT_MARKERS = (
+    "unsubscribe",
+    "sale ends",
+    "limited time offer",
+    "webinar",
+    "digest",
+    "newsletter",
+    "terms of service",
+    "privacy policy",
+    "verify your account",
+    "password reset",
+    "delivery update",
+)
+MEDICAL_PRACTICE_TERMS = (
+    "shalini",
+    "clinic",
+    "doctor",
+    "dr ",
+    "gp",
+    "referral",
+    "patient",
+    "medical",
+    "health",
+    "prescription",
+    "scan",
+    "ultrasound",
+    "gynaecology",
+    "gynecology",
+    "hormone",
+    "fertility",
+    "pregnancy",
+    "pcos",
+    "endometriosis",
+    "menopause",
+    "pelvic",
+    "bleeding",
+    "pain",
+)
+SCHEDULING_INTENT_TERMS = (
+    "appointment",
+    "consultation",
+    "reschedule",
+    "cancel",
+    "follow-up",
+    "follow up",
+    "meet & greet",
+    "meet and greet",
+    "referral",
+)
+BOOKING_PHRASES = (
+    "book an appointment",
+    "book a consultation",
+    "book a meet",
+    "arrange an appointment",
+    "arrange a consultation",
+    "schedule an appointment",
+)
+DIRECT_PATIENT_REQUEST_PATTERN = re.compile(
+    r"\b(i|i'm|i’d|i'd|my|me|could|can|would|please|available|prefer|need|want)\b",
+    flags=re.IGNORECASE,
+)
 
 
 class SlotConstraints(TypedDict):
@@ -1080,6 +1151,10 @@ def _patient_lookup_by_email() -> dict[str, ClinicPatientsItem]:
     return {item["email"].strip().lower(): item for item in _list_patient_items() if item["email"].strip()}
 
 
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
 def _is_clinic_message(
     *,
     headers: dict[str, str],
@@ -1087,10 +1162,32 @@ def _is_clinic_message(
     patient_by_email: dict[str, ClinicPatientsItem],
 ) -> bool:
     sender_email = parseaddr(headers.get("from", ""))[1].lower()
+    sender_text = headers.get("from", "").lower()
+    subject = headers.get("subject", "")
+    combined_text = f"{subject} {snippet}".lower()
+    if _contains_any(sender_email, NON_PATIENT_SENDER_MARKERS) or _contains_any(
+        sender_text,
+        NON_PATIENT_SENDER_MARKERS,
+    ):
+        return False
+    if _contains_any(combined_text, NON_PATIENT_TEXT_MARKERS):
+        return False
+
     if sender_email and sender_email in patient_by_email:
         return True
-    text = f"{headers.get('subject', '')} {snippet}".lower()
-    return any(keyword in text for keyword in CLINIC_MESSAGE_KEYWORDS)
+
+    has_medical_context = _contains_any(combined_text, MEDICAL_PRACTICE_TERMS)
+    has_scheduling_intent = _contains_any(combined_text, SCHEDULING_INTENT_TERMS) or _contains_any(
+        combined_text,
+        BOOKING_PHRASES,
+    )
+    has_direct_request = DIRECT_PATIENT_REQUEST_PATTERN.search(combined_text) is not None
+
+    if has_medical_context and (has_scheduling_intent or has_direct_request):
+        return True
+    if has_scheduling_intent and has_direct_request:
+        return True
+    return False
 
 
 def _infer_gmail_action_type(text: str) -> tuple[str, str]:
@@ -1374,10 +1471,13 @@ def _round_up_to_step(value: datetime, step_minutes: int) -> datetime:
     return rounded.replace(minute=minute)
 
 
-def _slot_label(start_at: datetime, end_at: datetime, appointment_kind: str) -> str:
+def _slot_label(start_at: datetime, end_at: datetime, appointment_kind: str, duration_minutes: int) -> str:
     start_time = start_at.strftime("%I:%M %p").lstrip("0")
     end_time = end_at.strftime("%I:%M %p").lstrip("0")
-    return f"{start_at:%A} {start_at.day} {start_at:%b}, {start_time} - {end_time} ({appointment_kind})"
+    return (
+        f"{start_at:%A} {start_at.day} {start_at:%b}, between {start_time} and {end_time} "
+        f"({duration_minutes}-minute {appointment_kind})"
+    )
 
 
 def _suggest_free_slot_labels(
@@ -1439,16 +1539,38 @@ def _suggest_free_slot_labels(
         day_busy_windows.sort(key=lambda window: window[0])
 
         for busy_start, busy_end in [*day_busy_windows, (day_end, day_end)]:
-            while cursor + timedelta(minutes=duration_minutes) <= busy_start:
-                slot_end = cursor + timedelta(minutes=duration_minutes)
-                slots.append(_slot_label(cursor, slot_end, appointment_kind))
+            if cursor + timedelta(minutes=duration_minutes) <= busy_start:
+                slots.append(_slot_label(cursor, busy_start, appointment_kind, duration_minutes))
                 if len(slots) >= limit:
                     return slots
-                cursor += timedelta(minutes=SLOT_STEP_MINUTES)
             if busy_end > cursor:
                 cursor = _round_up_to_step(busy_end, SLOT_STEP_MINUTES)
 
     return slots
+
+
+def _request_focus_phrase(text: str, appointment_kind: str) -> str:
+    lowered = text.lower()
+    if "reschedule" in lowered or "move" in lowered:
+        return "rescheduling your appointment"
+    if "cancel" in lowered:
+        return "changing your appointment"
+    if appointment_kind == "Meet & Greet":
+        return "arranging a meet and greet"
+    if appointment_kind == "Initial Consultation":
+        if "referral" in lowered or "gp" in lowered:
+            return "arranging an initial consultation following your referral"
+        return "arranging an initial consultation"
+    if appointment_kind == "Follow-up":
+        return "booking a follow-up appointment"
+    return "booking an appointment"
+
+
+def _reply_summary_note(summary: str) -> str:
+    normalized = summary.strip().lower()
+    if not normalized or normalized in {"appointment request", "meet & greet request", "new gmail message"}:
+        return ""
+    return f" I have noted: {summary}."
 
 
 def _draft_reply_for_message(
@@ -1457,15 +1579,20 @@ def _draft_reply_for_message(
     *,
     appointment_kind: str,
     slot_labels: list[str],
+    request_text: str = "",
 ) -> str:
     first_name = patient_name.split()[0] if patient_name and patient_name != "Unknown sender" else "there"
+    request_focus = _request_focus_phrase(request_text, appointment_kind)
+    summary_note = _reply_summary_note(summary)
     if slot_labels:
         formatted_slots = "\n".join(f"- {slot}" for slot in slot_labels)
         return (
             f"Dear {first_name},\n\n"
-            f"Thank you for your message. I can offer the following {appointment_kind.lower()} slots:\n\n"
+            f"Thank you for your message about {request_focus}.{summary_note} "
+            "I have checked Dr. Shalini's calendar and these windows currently look available:\n\n"
             f"{formatted_slots}\n\n"
-            "Please let me know which option works best and Dr. Shalini will confirm the appointment.\n\n"
+            "Please let me know what exact time within one of these windows works best, "
+            "and Dr. Shalini will confirm the appointment.\n\n"
             "Warm regards,\n"
             "Dr. Shalini's Clinic"
         )
@@ -1530,6 +1657,7 @@ def _gmail_message_to_action_item(
             summary,
             appointment_kind=appointment_kind,
             slot_labels=slot_labels,
+            request_text=request_text,
         ),
         "external_draft_id": "",
         "external_sent_message_id": "",
