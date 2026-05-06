@@ -33,7 +33,9 @@ read-first and approval-gated.
 - `sync_google_calendar` refreshes the OAuth token, reads Google Calendar
   events for the next sync window, and refreshes the local schedule cache.
 - `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail metadata and
-  snippets matching clinic keywords, and prepares in-app action drafts.
+  snippets matching clinic keywords, and prepares in-app action drafts. For
+  scheduling requests such as meet-and-greet or initial consultation messages,
+  draft replies include available slots from the local Google Calendar cache.
 
 ## Google scopes
 
@@ -56,7 +58,7 @@ Official docs:
 
 ## Next implementation steps
 
-1. Add doctor-editable draft text before approval.
-2. Add a patient matching/review workflow for unknown Gmail senders.
+1. Add a patient matching/review workflow for unknown Gmail senders.
+2. Add calendar-slot holds after an explicit approval step.
 3. Add explicit, separate approval actions for `create_gmail_draft` and
    `send_gmail_draft` when we are ready to move beyond in-app drafts.

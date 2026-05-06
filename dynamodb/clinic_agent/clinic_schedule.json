@@ -16,6 +16,7 @@
     "day_label": "String",
     "day_type": "String",
     "end_time": "String",
+    "end_at": "String",
     "external_calendar_id": "String",
     "external_etag": "String",
     "external_event_id": "String",
@@ -25,6 +26,7 @@
     "patient_name": "String",
     "sort_order": "Number",
     "source_provider": "String",
+    "start_at": "String",
     "start_time": "String",
     "status": "String"
   }

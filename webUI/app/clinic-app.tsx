@@ -98,11 +98,24 @@ function ActionQueue({
 }: {
   actions: ClinicAction[];
   loading: boolean;
-  onApprove: (action: ClinicAction) => Promise<void>;
+  onApprove: (action: ClinicAction, finalMessage: string) => Promise<void>;
   approvingId: string | null;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const pendingCount = actions.filter((action) => action.status !== "completed").length;
+
+  useEffect(() => {
+    setDraftEdits((current) => {
+      const next = { ...current };
+      for (const action of actions) {
+        if (action.draftMessage && next[action.actionId] === undefined) {
+          next[action.actionId] = action.finalMessage || action.draftMessage;
+        }
+      }
+      return next;
+    });
+  }, [actions]);
 
   return (
     <section className="screen-panel" aria-labelledby="actions-title">
@@ -131,6 +144,7 @@ function ActionQueue({
         {actions.map((action) => {
           const expanded = expandedId === action.actionId;
           const completed = action.status === "completed";
+          const draftValue = draftEdits[action.actionId] ?? action.finalMessage ?? action.draftMessage ?? "";
           return (
             <article key={action.actionId} className={`action-card ${completed ? "is-completed" : ""}`}>
               <button
@@ -159,7 +173,21 @@ function ActionQueue({
                   {action.draftMessage ? (
                     <div className="detail-block draft-block">
                       <span>Draft reply</span>
-                      <p>{action.finalMessage || action.draftMessage}</p>
+                      {completed ? (
+                        <p>{action.finalMessage || action.draftMessage}</p>
+                      ) : (
+                        <textarea
+                          className="draft-editor"
+                          value={draftValue}
+                          onChange={(event) =>
+                            setDraftEdits((current) => ({
+                              ...current,
+                              [action.actionId]: event.target.value,
+                            }))
+                          }
+                          rows={10}
+                        />
+                      )}
                     </div>
                   ) : null}
 
@@ -170,13 +198,10 @@ function ActionQueue({
                       <button
                         type="button"
                         className="primary-button"
-                        onClick={() => void onApprove(action)}
+                        onClick={() => void onApprove(action, draftValue)}
                         disabled={approvingId === action.actionId}
                       >
                         {approvingId === action.actionId ? "Saving..." : "Approve and store"}
-                      </button>
-                      <button type="button" className="secondary-button">
-                        Edit draft
                       </button>
                     </div>
                   ) : (
@@ -556,7 +581,7 @@ export function ClinicApp({
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   }, []);
 
-  async function approveAction(action: ClinicAction) {
+  async function approveAction(action: ClinicAction, finalMessage: string) {
     setApprovingId(action.actionId);
     setError("");
     try {
@@ -565,7 +590,7 @@ export function ClinicApp({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           approvedBy: "Dr. Shalini",
-          finalMessage: action.draftMessage || action.sourceSummary,
+          finalMessage: finalMessage.trim() || action.draftMessage || action.sourceSummary,
         }),
       });
       const body = (await response.json()) as ClinicAgentApproveActionOutput & { error?: string };

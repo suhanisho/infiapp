@@ -133,6 +133,7 @@ class ClinicScheduleItem(TypedDict):
     day_key: str
     day_label: str
     day_type: str
+    end_at: str
     end_time: str
     event_id: str
     external_calendar_id: str
@@ -143,6 +144,7 @@ class ClinicScheduleItem(TypedDict):
     patient_name: str
     sort_order: int | float
     source_provider: str
+    start_at: str
     start_time: str
     status: str
 
@@ -266,6 +268,7 @@ CLINIC_SCHEDULE_TABLE: dict[str, Any] = {
         "day_key": "String",
         "day_label": "String",
         "day_type": "String",
+        "end_at": "String",
         "end_time": "String",
         "event_id": "String",
         "external_calendar_id": "String",
@@ -276,6 +279,7 @@ CLINIC_SCHEDULE_TABLE: dict[str, Any] = {
         "patient_name": "String",
         "sort_order": "Number",
         "source_provider": "String",
+        "start_at": "String",
         "start_time": "String",
         "status": "String",
     },

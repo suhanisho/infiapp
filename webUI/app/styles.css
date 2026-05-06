@@ -374,9 +374,28 @@ h1 {
   white-space: pre-line;
 }
 
+.draft-editor {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(169, 130, 47, 0.2);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  outline: 0;
+  padding: 10px 11px;
+  white-space: pre-wrap;
+}
+
+.draft-editor:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(169, 130, 47, 0.13);
+}
+
 .action-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-top: 12px;
 }

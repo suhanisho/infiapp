@@ -48,15 +48,22 @@ DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = (
     "in:inbox newer_than:30d "
-    "(appointment OR booking OR book OR consultation OR referral OR reschedule OR cancel OR follow-up)"
+    "(appointment OR booking OR book OR consultation OR referral OR meet OR greet OR intro OR reschedule OR cancel OR follow-up)"
 )
 GMAIL_SCAN_MAX_MESSAGES = 10
+DEFAULT_SLOT_SUGGESTIONS = 3
+SLOT_SEARCH_DAYS = 14
+SLOT_STEP_MINUTES = 30
+MIN_BOOKING_NOTICE_HOURS = 2
 CLINIC_MESSAGE_KEYWORDS = (
     "appointment",
     "booking",
     "book",
     "consultation",
     "referral",
+    "meet",
+    "greet",
+    "intro",
     "reschedule",
     "cancel",
     "follow-up",
@@ -252,6 +259,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "private",
         "start_time": "09:00",
         "end_time": "09:45",
+        "start_at": "2026-04-28T09:00:00+01:00",
+        "end_at": "2026-04-28T09:45:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-04-28-0900",
@@ -271,6 +280,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "private",
         "start_time": "13:30",
         "end_time": "14:00",
+        "start_at": "2026-04-28T13:30:00+01:00",
+        "end_at": "2026-04-28T14:00:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-04-28-1330",
@@ -290,6 +301,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "nhs",
         "start_time": "08:30",
         "end_time": "13:00",
+        "start_at": "2026-04-30T08:30:00+01:00",
+        "end_at": "2026-04-30T13:00:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-04-30-0830",
@@ -309,6 +322,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "nhs",
         "start_time": "14:00",
         "end_time": "14:45",
+        "start_at": "2026-04-30T14:00:00+01:00",
+        "end_at": "2026-04-30T14:45:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-04-30-1400",
@@ -328,6 +343,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "private",
         "start_time": "10:00",
         "end_time": "10:45",
+        "start_at": "2026-05-02T10:00:00+01:00",
+        "end_at": "2026-05-02T10:45:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-05-02-1000",
@@ -347,6 +364,8 @@ SEED_SCHEDULE: list[ClinicScheduleItem] = [
         "day_type": "private",
         "start_time": "11:00",
         "end_time": "11:30",
+        "start_at": "2026-05-02T11:00:00+01:00",
+        "end_at": "2026-05-02T11:30:00+01:00",
         "external_calendar_id": "primary",
         "external_etag": "",
         "external_event_id": "gcal-2026-05-02-1100",
@@ -986,6 +1005,8 @@ def _calendar_event_to_schedule_item(
         "day_type": "nhs" if "nhs" in event_text else "private",
         "start_time": start_label or "All day",
         "end_time": end_label or ("All day" if all_day else start_label),
+        "start_at": start_at.isoformat(),
+        "end_at": end_at.isoformat(),
         "external_calendar_id": calendar_id,
         "external_etag": raw_etag if isinstance(raw_etag, str) else "",
         "external_event_id": external_event_id,
@@ -1065,8 +1086,205 @@ def _infer_gmail_action_type(text: str) -> tuple[str, str]:
     return "enquiry", "new"
 
 
-def _draft_reply_for_message(patient_name: str, summary: str) -> str:
+def _parse_time_value(value: str) -> time | None:
+    normalized = value.strip()
+    if not normalized or normalized.lower() == "all day":
+        return None
+    for pattern in ("%H:%M", "%I:%M %p", "%I %p"):
+        try:
+            return datetime.strptime(normalized.upper(), pattern).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_hours_range(hours: str) -> tuple[time, time] | None:
+    parts = re.split(r"\s+-\s+", hours.strip(), maxsplit=1)
+    if len(parts) != 2:
+        return None
+    start = _parse_time_value(parts[0])
+    end = _parse_time_value(parts[1])
+    if start is None or end is None or end <= start:
+        return None
+    return start, end
+
+
+def _weekday_availability() -> dict[int, tuple[time, time]]:
+    weekday_by_name = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+    settings = {item["setting_id"]: item for item in _list_setting_items()}
+    rules = _setting_items("availability_rules", settings)
+    availability: dict[int, tuple[time, time]] = {}
+    for rule in rules:
+        day = str(rule.get("day", "")).strip().lower()
+        enabled = bool(rule.get("enabled", False))
+        rule_type = str(rule.get("type", "")).strip().lower()
+        hours = str(rule.get("hours", "")).strip()
+        parsed_hours = _parse_hours_range(hours)
+        if not enabled or parsed_hours is None or rule_type == "nhs":
+            continue
+        weekday = weekday_by_name.get(day)
+        if weekday is not None:
+            availability[weekday] = parsed_hours
+
+    if availability:
+        return availability
+    default_start, default_end = time(9, 0), time(17, 0)
+    return {weekday: (default_start, default_end) for weekday in range(5)}
+
+
+def _request_appointment_details(text: str) -> tuple[str, int]:
+    lowered = text.lower()
+    if "meet & greet" in lowered or "meet and greet" in lowered or "intro" in lowered or "introductory" in lowered:
+        return "Meet & Greet", 15
+    if "follow-up" in lowered or "follow up" in lowered or "review" in lowered:
+        return "Follow-up", 20
+    if "scan" in lowered or "procedure" in lowered:
+        return "Scan / Procedure", 30
+    if "consultation" in lowered or "referral" in lowered or "appointment" in lowered or "book" in lowered:
+        return "Initial Consultation", 45
+    return "Appointment", 30
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    zone = _clinic_timezone()
+    return parsed.astimezone(zone) if parsed.tzinfo else parsed.replace(tzinfo=zone)
+
+
+def _parse_schedule_day_label(value: str) -> date | None:
+    match = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3,})\b", value)
+    if match is None:
+        return None
+    day_and_month = f"{match.group(1)} {match.group(2)}"
+    current_year = datetime.now(_clinic_timezone()).year
+    for pattern in ("%d %b %Y", "%d %B %Y"):
+        try:
+            candidate = datetime.strptime(f"{day_and_month} {current_year}", pattern).date()
+        except ValueError:
+            continue
+        if candidate < datetime.now(_clinic_timezone()).date() - timedelta(days=30):
+            return date(candidate.year + 1, candidate.month, candidate.day)
+        return candidate
+    return None
+
+
+def _schedule_item_window(item: ClinicScheduleItem) -> tuple[datetime, datetime] | None:
+    start_at = _parse_datetime(item.get("start_at"))
+    end_at = _parse_datetime(item.get("end_at"))
+    if start_at is not None and end_at is not None and end_at > start_at:
+        return start_at, end_at
+
+    schedule_date = _parse_schedule_day_label(item["day_label"])
+    start_time = _parse_time_value(item["start_time"])
+    end_time = _parse_time_value(item["end_time"])
+    if schedule_date is not None and start_time is not None and end_time is not None and end_time > start_time:
+        zone = _clinic_timezone()
+        return (
+            datetime.combine(schedule_date, start_time, tzinfo=zone),
+            datetime.combine(schedule_date, end_time, tzinfo=zone),
+        )
+    return None
+
+
+def _busy_schedule_windows() -> list[tuple[datetime, datetime]]:
+    busy_windows: list[tuple[datetime, datetime]] = []
+    for item in _list_schedule_items():
+        if item["status"] == "open" or item["appointment_type"].lower() == "open slot":
+            continue
+        window = _schedule_item_window(item)
+        if window is not None:
+            busy_windows.append(window)
+    return sorted(busy_windows, key=lambda window: window[0])
+
+
+def _round_up_to_step(value: datetime, step_minutes: int) -> datetime:
+    minute = ((value.minute + step_minutes - 1) // step_minutes) * step_minutes
+    rounded = value.replace(second=0, microsecond=0)
+    if minute >= 60:
+        return rounded.replace(minute=0) + timedelta(hours=1)
+    return rounded.replace(minute=minute)
+
+
+def _slot_label(start_at: datetime, end_at: datetime, appointment_kind: str) -> str:
+    start_time = start_at.strftime("%I:%M %p").lstrip("0")
+    end_time = end_at.strftime("%I:%M %p").lstrip("0")
+    return f"{start_at:%A} {start_at.day} {start_at:%b}, {start_time} - {end_time} ({appointment_kind})"
+
+
+def _suggest_free_slot_labels(
+    *,
+    appointment_kind: str,
+    duration_minutes: int,
+    limit: int = DEFAULT_SLOT_SUGGESTIONS,
+) -> list[str]:
+    zone = _clinic_timezone()
+    now = datetime.now(zone)
+    earliest_start = _round_up_to_step(now + timedelta(hours=MIN_BOOKING_NOTICE_HOURS), SLOT_STEP_MINUTES)
+    availability = _weekday_availability()
+    busy_windows = _busy_schedule_windows()
+    slots: list[str] = []
+
+    for day_offset in range(SLOT_SEARCH_DAYS):
+        current_day = (now + timedelta(days=day_offset)).date()
+        hours = availability.get(current_day.weekday())
+        if hours is None:
+            continue
+
+        day_start = datetime.combine(current_day, hours[0], tzinfo=zone)
+        day_end = datetime.combine(current_day, hours[1], tzinfo=zone)
+        cursor = max(day_start, earliest_start) if current_day == earliest_start.date() else day_start
+        cursor = _round_up_to_step(cursor, SLOT_STEP_MINUTES)
+        day_busy_windows = [
+            (max(start_at, day_start), min(end_at, day_end))
+            for start_at, end_at in busy_windows
+            if start_at < day_end and end_at > day_start
+        ]
+
+        for busy_start, busy_end in [*day_busy_windows, (day_end, day_end)]:
+            while cursor + timedelta(minutes=duration_minutes) <= busy_start:
+                slot_end = cursor + timedelta(minutes=duration_minutes)
+                slots.append(_slot_label(cursor, slot_end, appointment_kind))
+                if len(slots) >= limit:
+                    return slots
+                cursor += timedelta(minutes=SLOT_STEP_MINUTES)
+            if busy_end > cursor:
+                cursor = _round_up_to_step(busy_end, SLOT_STEP_MINUTES)
+
+    return slots
+
+
+def _draft_reply_for_message(
+    patient_name: str,
+    summary: str,
+    *,
+    appointment_kind: str,
+    slot_labels: list[str],
+) -> str:
     first_name = patient_name.split()[0] if patient_name and patient_name != "Unknown sender" else "there"
+    if slot_labels:
+        formatted_slots = "\n".join(f"- {slot}" for slot in slot_labels)
+        return (
+            f"Dear {first_name},\n\n"
+            f"Thank you for your message. I can offer the following {appointment_kind.lower()} slots:\n\n"
+            f"{formatted_slots}\n\n"
+            "Please let me know which option works best and Dr. Shalini will confirm the appointment.\n\n"
+            "Warm regards,\n"
+            "Dr. Shalini's Clinic"
+        )
+
     return (
         f"Dear {first_name},\n\n"
         "Thank you for your message. I have noted your request"
@@ -1099,6 +1317,8 @@ def _gmail_message_to_action_item(
     summary = _truncate(subject or snippet or "New Gmail message", 120)
     source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
     action_type, priority = _infer_gmail_action_type(f"{subject} {snippet}")
+    appointment_kind, duration_minutes = _request_appointment_details(f"{subject} {snippet}")
+    slot_labels = _suggest_free_slot_labels(appointment_kind=appointment_kind, duration_minutes=duration_minutes)
     created_at = _gmail_message_datetime(message, headers)
     thread_id = message.get("threadId")
     localized = created_at.astimezone(_clinic_timezone())
@@ -1114,7 +1334,12 @@ def _gmail_message_to_action_item(
         "time_label": localized.strftime("%I:%M %p").lstrip("0"),
         "source_summary": summary,
         "source_message": source_message,
-        "draft_message": _draft_reply_for_message(patient_name, summary),
+        "draft_message": _draft_reply_for_message(
+            patient_name,
+            summary,
+            appointment_kind=appointment_kind,
+            slot_labels=slot_labels,
+        ),
         "external_draft_id": "",
         "external_sent_message_id": "",
         "final_message": "",

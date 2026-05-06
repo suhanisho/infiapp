@@ -175,6 +175,11 @@ class ClinicAgentTest(unittest.TestCase):
                 return_value=({**handler_module.SEED_INTEGRATIONS[1], "token_secret_id": "secret"}, FakeGoogleClient()),
             ),
             patch.object(handler_module, "_patient_lookup_by_email", return_value={}),
+            patch.object(
+                handler_module,
+                "_suggest_free_slot_labels",
+                return_value=["Monday 11 May, 9:00 AM - 9:45 AM (Initial Consultation)"],
+            ),
             patch.object(handler_module, "get_clinic_actions", return_value=None),
             patch.object(handler_module, "_replace_open_gmail_action_candidates") as replace_actions,
             patch.object(handler_module, "_mark_integration_success") as mark_success,
@@ -189,8 +194,25 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["messagesScanned"], 1)
         self.assertEqual(body["proposedActions"], 1)
         self.assertIn("no email was sent", body["message"])
+        self.assertIn("Monday 11 May", body["actions"][0]["draftMessage"])
         replace_actions.assert_called_once()
         mark_success.assert_called_once()
+
+    def test_meet_and_greet_draft_uses_short_calendar_slots(self) -> None:
+        appointment_kind, duration_minutes = handler_module._request_appointment_details(
+            "Can I book a meet & greet with Dr. Shalini?"
+        )
+        draft = handler_module._draft_reply_for_message(
+            "Rachel Davies",
+            "Meet & Greet request",
+            appointment_kind=appointment_kind,
+            slot_labels=["Monday 11 May, 9:00 AM - 9:15 AM (Meet & Greet)"],
+        )
+
+        self.assertEqual(appointment_kind, "Meet & Greet")
+        self.assertEqual(duration_minutes, 15)
+        self.assertIn("Monday 11 May", draft)
+        self.assertIn("Please let me know which option works best", draft)
 
     def test_connect_google_workspace_stores_metadata_without_returning_tokens(self) -> None:
         token_response = {
