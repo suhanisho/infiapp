@@ -74,6 +74,10 @@ def log_section(message: str) -> None:
     print(f"\n==> {message}", flush=True)
 
 
+def env_value(key: str, default: str = "") -> str:
+    return os.environ.get(key, default).strip()
+
+
 def vercel_project_path() -> str:
     return f"/v9/projects/{urllib.parse.quote(VERCEL_PROJECT_NAME)}"
 
@@ -110,7 +114,7 @@ def redact_command(command: list[str]) -> list[str]:
 
 def with_aws_region(command: list[str]) -> list[str]:
     if command and command[0] == "aws" and "--region" not in command:
-        region = os.environ.get("AWS_REGION")
+        region = env_value("AWS_REGION")
         if region:
             return ["aws", "--region", region, *command[1:]]
     return command
@@ -275,7 +279,7 @@ def ensure_agent_role(agent_name: str) -> str:
         flush=True,
     )
     table_arns = [
-        f"arn:aws:dynamodb:{os.environ['AWS_REGION']}:{account_id}:table/{table['table_name']}"
+        f"arn:aws:dynamodb:{env_value('AWS_REGION')}:{account_id}:table/{table['table_name']}"
         for table in owned_tables
     ]
     statements: list[dict[str, Any]] = [
@@ -310,7 +314,7 @@ def ensure_agent_role(agent_name: str) -> str:
                     "secretsmanager:UpdateSecret",
                 ],
                 "Resource": (
-                    f"arn:aws:secretsmanager:{os.environ['AWS_REGION']}:{account_id}:"
+                    f"arn:aws:secretsmanager:{env_value('AWS_REGION')}:{account_id}:"
                     f"secret:{token_secret_prefix}/*"
                 ),
             }
@@ -393,7 +397,7 @@ def zip_agent(agent_dir: Path, output_path: Path) -> None:
 def google_token_secret_prefix(agent_name: str) -> str:
     if agent_name != GOOGLE_AGENT_NAME:
         return ""
-    configured = os.environ.get("GOOGLE_TOKEN_SECRET_PREFIX", GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX)
+    configured = env_value("GOOGLE_TOKEN_SECRET_PREFIX", GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX)
     return configured.strip().strip("/") or GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX
 
 
@@ -403,7 +407,7 @@ def agent_environment_args(agent_name: str) -> list[str]:
     variables = {
         key: value
         for key in sorted(GOOGLE_AGENT_ENV_KEYS)
-        if (value := os.environ.get(key))
+        if (value := env_value(key))
     }
     return ["--environment", json.dumps({"Variables": variables})] if variables else []
 
@@ -752,7 +756,7 @@ def vercel_runtime_env(region: str, role_arn: str) -> dict[str, str]:
         "SHALINI_CLINIC_AGENT_BACKEND_MODE": "aws_oidc",
     }
     for key in sorted(VERCEL_MANAGED_ENV_KEYS - values.keys()):
-        value = os.environ.get(key, "").strip()
+        value = env_value(key)
         if value:
             values[key] = value
     return values
@@ -760,7 +764,9 @@ def vercel_runtime_env(region: str, role_arn: str) -> dict[str, str]:
 
 def deploy_vercel_oidc_access(vercel_token: str, vercel_team_id: str) -> str:
     log_section("Configuring Vercel OIDC access")
-    region = os.environ["AWS_REGION"]
+    region = env_value("AWS_REGION")
+    if not region:
+        raise RuntimeError("AWS_REGION must be set for deployment")
     account_id = get_aws_account_id()
     team_slug = get_vercel_team_slug(vercel_token, vercel_team_id)
     ensure_vercel_project(vercel_token, vercel_team_id)
@@ -774,14 +780,19 @@ def deploy_webui() -> None:
     log_section("Deploying WebUI to Vercel")
     if not shutil.which("npx"):
         raise RuntimeError("npx is required to deploy the WebUI to Vercel")
-    vercel_token = os.environ.get("VERCEL_TOKEN")
-    vercel_team_id = os.environ.get("VERCEL_TEAM_ID")
+    vercel_token = env_value("VERCEL_TOKEN")
+    vercel_team_id = env_value("VERCEL_TEAM_ID")
     if not vercel_token:
         raise RuntimeError("VERCEL_TOKEN must be set for WebUI deployment")
     if not vercel_team_id:
         raise RuntimeError("VERCEL_TEAM_ID must be set for WebUI deployment")
     vercel_team_slug = deploy_vercel_oidc_access(vercel_token, vercel_team_id)
-    vercel_env = {**os.environ, "VERCEL_TOKEN": vercel_token, "VERCEL_TEAM_ID": vercel_team_id}
+    vercel_env = {
+        **os.environ,
+        "AWS_REGION": env_value("AWS_REGION"),
+        "VERCEL_TOKEN": vercel_token,
+        "VERCEL_TEAM_ID": vercel_team_id,
+    }
     for key in VERCEL_CLI_OMITTED_ENV_KEYS:
         vercel_env.pop(key, None)
     run(["npm", "ci"], cwd=WEBUI_DIR)
