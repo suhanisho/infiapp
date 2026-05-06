@@ -455,28 +455,42 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
     };
   }
   if (payload.action === "sync_google_calendar") {
+    const syncedAt = new Date().toISOString();
+    const calendarIntegration = integrations.find((item) => item.integrationId === "google_calendar");
+    if (calendarIntegration) {
+      calendarIntegration.status = "connected";
+      calendarIntegration.lastSyncAt = syncedAt;
+      calendarIntegration.lastError = null;
+    }
     const eventsRead = scheduleDays.reduce((count, day) => count + day.events.length, 0);
     return {
-      status: "preview",
+      status: "synced",
       sourceOfTruth: "google_calendar",
       writeMode: "read_only_cache",
       externalWrites: 0,
       eventsRead,
       appointmentsCached: eventsRead,
-      message: "Calendar sync path is read-only: appointments are read from Google Calendar and cached locally.",
+      message: "Calendar read completed. The local schedule cache was refreshed; Google Calendar was not changed.",
       days: clone(scheduleDays),
     };
   }
   if (payload.action === "scan_gmail_inbox") {
+    const syncedAt = new Date().toISOString();
+    const gmailIntegration = integrations.find((item) => item.integrationId === "gmail");
+    if (gmailIntegration) {
+      gmailIntegration.status = "connected";
+      gmailIntegration.lastSyncAt = syncedAt;
+      gmailIntegration.lastError = null;
+    }
     const gmailActions = actions.filter((item) => item.sourceProvider === "gmail");
     return {
-      status: "preview",
+      status: "synced",
       sourceOfTruth: "gmail",
       writeMode: "read_inbox_prepare_in_app_drafts",
       externalWrites: 0,
       messagesScanned: gmailActions.length,
       proposedActions: gmailActions.length,
-      message: "Gmail scan path is read-only: messages become proposed action records and in-app drafts only.",
+      message: "Gmail read completed. In-app action drafts were prepared; no email was sent or drafted in Gmail.",
       actions: clone(gmailActions),
     };
   }

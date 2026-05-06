@@ -9,6 +9,8 @@ import type {
   ClinicAgentListPatientsOutput,
   ClinicAgentListScheduleOutput,
   ClinicAgentListSettingsOutput,
+  ClinicAgentScanGmailInboxOutput,
+  ClinicAgentSyncGoogleCalendarOutput,
 } from "@/src/lib/generated/mockAgents";
 import { googleProviderId } from "@/src/lib/auth/providers";
 
@@ -333,6 +335,18 @@ function integrationLabel(provider: string) {
   return provider;
 }
 
+function lastReadLabel(value: string | null) {
+  if (!value) {
+    return "Not read yet";
+  }
+  return `Last read ${new Date(value).toLocaleString([], {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+  })}`;
+}
+
 function connectedIntegrationState(integrations: Integration[]) {
   const connectedAt = new Date().toISOString();
   return integrations.map((integration) => ({
@@ -352,7 +366,11 @@ function SettingsDrawer({
   googleAuthAvailable,
   mockAuthAvailable,
   onConnectGoogle,
+  onScanGmail,
+  onSyncCalendar,
   onClose,
+  scanningGmail,
+  syncingCalendar,
 }: {
   settings: Settings;
   integrations: Integration[];
@@ -361,8 +379,14 @@ function SettingsDrawer({
   googleAuthAvailable: boolean;
   mockAuthAvailable: boolean;
   onConnectGoogle: () => void;
+  onScanGmail: () => Promise<void>;
+  onSyncCalendar: () => Promise<void>;
   onClose: () => void;
+  scanningGmail: boolean;
+  syncingCalendar: boolean;
 }) {
+  const googleConnected = integrations.some((integration) => integration.status === "connected");
+
   return (
     <>
       <button type="button" className="drawer-backdrop" aria-label="Close settings" onClick={onClose} />
@@ -381,9 +405,29 @@ function SettingsDrawer({
             <div key={integration.integrationId} className="settings-row split">
               <strong>{integrationLabel(integration.provider)}</strong>
               <em>{integration.status === "ready_to_connect" ? "Ready" : statusLabel(integration.status)}</em>
-              <small>{integration.writeMode.replaceAll("_", " ")}</small>
+              <small>
+                {integration.writeMode.replaceAll("_", " ")} · {lastReadLabel(integration.lastSyncAt)}
+              </small>
             </div>
           ))}
+          <div className="integration-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!googleConnected || syncingCalendar}
+              onClick={() => void onSyncCalendar()}
+            >
+              {syncingCalendar ? "Reading..." : "Read Calendar"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!googleConnected || scanningGmail}
+              onClick={() => void onScanGmail()}
+            >
+              {scanningGmail ? "Scanning..." : "Scan Gmail"}
+            </button>
+          </div>
           <button
             type="button"
             className="connect-link"
@@ -435,6 +479,17 @@ function SettingsDrawer({
   );
 }
 
+async function loadClinicSnapshot() {
+  const [actionData, patientData, scheduleData, settingsData, integrationData] = await Promise.all([
+    loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
+    loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
+    loadJson<ClinicAgentListScheduleOutput>("/api/clinic/schedule"),
+    loadJson<ClinicAgentListSettingsOutput>("/api/clinic/settings"),
+    loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations"),
+  ]);
+  return { actionData, patientData, scheduleData, settingsData, integrationData };
+}
+
 export function ClinicApp({
   doctorEmail,
   doctorName,
@@ -457,6 +512,8 @@ export function ClinicApp({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [syncingCalendar, setSyncingCalendar] = useState(false);
+  const [scanningGmail, setScanningGmail] = useState(false);
 
   useEffect(() => {
     async function loadClinicData() {
@@ -465,13 +522,7 @@ export function ClinicApp({
       setLoading(true);
       setError("");
       try {
-        const [actionData, patientData, scheduleData, settingsData, integrationData] = await Promise.all([
-          loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
-          loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
-          loadJson<ClinicAgentListScheduleOutput>("/api/clinic/schedule"),
-          loadJson<ClinicAgentListSettingsOutput>("/api/clinic/settings"),
-          loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations"),
-        ]);
+        const { actionData, patientData, scheduleData, settingsData, integrationData } = await loadClinicSnapshot();
         setActions(actionData.actions);
         setPatients(patientData.patients);
         setDays(scheduleData.days);
@@ -529,6 +580,54 @@ export function ClinicApp({
     }
   }
 
+  async function refreshIntegrations() {
+    const integrationData = await loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations");
+    setIntegrations(integrationData.integrations);
+  }
+
+  async function syncGoogleCalendar() {
+    setSyncingCalendar(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/clinic/integrations/google-calendar/sync", { method: "POST" });
+      const body = (await response.json()) as ClinicAgentSyncGoogleCalendarOutput & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Unable to read Google Calendar");
+      }
+      setDays(body.days);
+      await refreshIntegrations();
+      setTab("schedule");
+      setNotice(`${body.eventsRead} calendar events read. Google Calendar was not changed.`);
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Unable to read Google Calendar");
+    } finally {
+      setSyncingCalendar(false);
+    }
+  }
+
+  async function scanGmail() {
+    setScanningGmail(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/clinic/integrations/gmail/scan", { method: "POST" });
+      const body = (await response.json()) as ClinicAgentScanGmailInboxOutput & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Unable to scan Gmail");
+      }
+      const actionData = await loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true");
+      setActions(actionData.actions);
+      await refreshIntegrations();
+      setTab("actions");
+      setNotice(`${body.messagesScanned} Gmail messages scanned; ${body.proposedActions} in-app drafts prepared. Nothing was sent.`);
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : "Unable to scan Gmail");
+    } finally {
+      setScanningGmail(false);
+    }
+  }
+
   function connectGoogle() {
     if (googleAuthAvailable) {
       void signIn(googleProviderId, { callbackUrl: "/?googleOAuth=connected" });
@@ -559,7 +658,11 @@ export function ClinicApp({
           googleAuthAvailable={googleAuthAvailable}
           mockAuthAvailable={mockAuthAvailable}
           onConnectGoogle={connectGoogle}
+          onScanGmail={scanGmail}
+          onSyncCalendar={syncGoogleCalendar}
           onClose={() => setMenuOpen(false)}
+          scanningGmail={scanningGmail}
+          syncingCalendar={syncingCalendar}
         />
       ) : null}
 

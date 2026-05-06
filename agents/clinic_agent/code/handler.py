@@ -7,11 +7,15 @@ approvals, and completions, but it does not send email or update calendars.
 from __future__ import annotations
 
 import base64
+import hashlib
+import html
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from generated.dynamodb import (
     ClinicActionsItem,
@@ -19,7 +23,10 @@ from generated.dynamodb import (
     ClinicPatientsItem,
     ClinicScheduleItem,
     ClinicSettingsItem,
+    delete_clinic_actions,
+    delete_clinic_schedule,
     get_clinic_actions,
+    get_clinic_integrations,
     put_clinic_actions,
     put_clinic_integrations,
     put_clinic_patients,
@@ -31,12 +38,32 @@ from generated.dynamodb import (
     query_clinic_schedule,
     query_clinic_settings,
 )
-from google_workspace import required_google_scopes
+from google_workspace import GoogleWorkspaceError, GoogleWorkspaceHttpClient, refresh_google_access_token, required_google_scopes
 from response import json_response
 
 CLINIC_ID = "shalini-clinic"
 SEED_UPDATED_AT = "2026-05-02T00:00:00+00:00"
 COMPLETION_NOTE = "Doctor approved and stored this action. No external email or calendar action was taken by the MVP."
+DEFAULT_CLINIC_TIMEZONE = "Europe/London"
+CALENDAR_SYNC_DAYS = 14
+GMAIL_SCAN_QUERY = (
+    "in:inbox newer_than:30d "
+    "(appointment OR booking OR book OR consultation OR referral OR reschedule OR cancel OR follow-up)"
+)
+GMAIL_SCAN_MAX_MESSAGES = 10
+CLINIC_MESSAGE_KEYWORDS = (
+    "appointment",
+    "booking",
+    "book",
+    "consultation",
+    "referral",
+    "reschedule",
+    "cancel",
+    "follow-up",
+    "follow up",
+    "clinic",
+    "patient",
+)
 
 SEED_ACTIONS: list[ClinicActionsItem] = [
     {
@@ -418,10 +445,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _clinic_timezone() -> timezone | ZoneInfo:
+    zone_name = os.environ.get("CLINIC_TIMEZONE", DEFAULT_CLINIC_TIMEZONE).strip() or DEFAULT_CLINIC_TIMEZONE
+    try:
+        return ZoneInfo(zone_name)
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
 def _optional_text(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _truncate(value: str, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: max(0, limit - 1)].rstrip()}..."
+
+
+def _safe_external_fragment(value: str) -> str:
+    fragment = re.sub(r"[^A-Za-z0-9_.:@=-]+", "-", value).strip("-")
+    if fragment:
+        return fragment[:120]
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
 
 
 def _action_dto(item: ClinicActionsItem) -> dict[str, Any]:
@@ -501,6 +550,9 @@ def _list_action_items() -> list[ClinicActionsItem]:
     items = query_clinic_actions(CLINIC_ID, scan_index_forward=True, consistent_read=True)
     if items:
         return items
+    gmail_integration = get_clinic_integrations(CLINIC_ID, "gmail")
+    if gmail_integration and gmail_integration["last_sync_at"]:
+        return []
     for item in SEED_ACTIONS:
         put_clinic_actions(item)
     return list(SEED_ACTIONS)
@@ -519,6 +571,9 @@ def _list_schedule_items() -> list[ClinicScheduleItem]:
     items = query_clinic_schedule(CLINIC_ID, scan_index_forward=True, consistent_read=True)
     if items:
         return items
+    calendar_integration = get_clinic_integrations(CLINIC_ID, "google_calendar")
+    if calendar_integration and calendar_integration["last_sync_at"]:
+        return []
     for item in SEED_SCHEDULE:
         put_clinic_schedule(item)
     return list(SEED_SCHEDULE)
@@ -744,33 +799,415 @@ def _connect_google_workspace(account_email: str, token_response: dict[str, Any]
     }
 
 
-def _sync_google_calendar() -> dict[str, Any]:
-    schedule = _list_schedule()
-    event_count = sum(len(day["events"]) for day in schedule["days"])
+def _google_oauth_config() -> tuple[str, str]:
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise RuntimeError("Google OAuth client ID and secret are required for live Google reads.")
+    return client_id, client_secret
+
+
+def _connected_google_integration(integration_id: str) -> ClinicIntegrationsItem:
+    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    if integration is None:
+        _list_integration_items()
+        integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    if integration is None or not integration["token_secret_id"]:
+        raise RuntimeError("Connect Google before reading Calendar or Gmail.")
+    return integration
+
+
+def _load_google_token_payload(secret_id: str) -> dict[str, Any]:
+    import boto3
+
+    client = boto3.client("secretsmanager")
+    response = client.get_secret_value(SecretId=secret_id)
+    secret_string = response.get("SecretString")
+    if not isinstance(secret_string, str) or not secret_string:
+        raise RuntimeError("Stored Google token secret is empty.")
+    parsed = json.loads(secret_string)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Stored Google token secret has an unexpected format.")
+    return parsed
+
+
+def _store_google_token_payload(secret_id: str, payload: dict[str, Any]) -> None:
+    import boto3
+
+    client = boto3.client("secretsmanager")
+    client.put_secret_value(SecretId=secret_id, SecretString=json.dumps(payload, sort_keys=True))
+
+
+def _google_client_for_integration(integration_id: str) -> tuple[ClinicIntegrationsItem, GoogleWorkspaceHttpClient]:
+    integration = _connected_google_integration(integration_id)
+    token_payload = _load_google_token_payload(integration["token_secret_id"])
+    token_response = token_payload.get("token_response")
+    if not isinstance(token_response, dict):
+        raise RuntimeError("Stored Google token payload is missing token_response.")
+
+    client_id, client_secret = _google_oauth_config()
+    refreshed = refresh_google_access_token(
+        token_response=token_response,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    merged_token_response = {**token_response, **refreshed}
+    token_payload["token_response"] = merged_token_response
+    token_payload["refreshed_at"] = _now()
+    _store_google_token_payload(integration["token_secret_id"], token_payload)
+
+    access_token = merged_token_response.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise RuntimeError("Google access token is missing after refresh.")
+    return integration, GoogleWorkspaceHttpClient(access_token)
+
+
+def _mark_integration_success(integration_id: str, synced_at: str) -> None:
+    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    if integration is None:
+        return
+    updated = cast(
+        ClinicIntegrationsItem,
+        {
+            **integration,
+            "status": "connected",
+            "last_sync_at": synced_at,
+            "last_error": "",
+            "updated_at": synced_at,
+        },
+    )
+    put_clinic_integrations(updated)
+
+
+def _mark_integration_failure(integration_id: str, message: str) -> None:
+    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    if integration is None:
+        return
+    now = _now()
+    updated = cast(
+        ClinicIntegrationsItem,
+        {
+            **integration,
+            "status": "error",
+            "last_error": _truncate(message, 300),
+            "updated_at": now,
+        },
+    )
+    put_clinic_integrations(updated)
+
+
+def _calendar_sync_window() -> tuple[str, str]:
+    zone = _clinic_timezone()
+    today = datetime.now(zone).date()
+    start = datetime.combine(today, time.min, tzinfo=zone)
+    end = start + timedelta(days=CALENDAR_SYNC_DAYS)
+    return start.isoformat(), end.isoformat()
+
+
+def _calendar_edge_datetime(edge: object, fallback: datetime) -> tuple[datetime, str, bool]:
+    zone = _clinic_timezone()
+    if not isinstance(edge, dict):
+        return fallback, "", False
+
+    date_time = edge.get("dateTime")
+    if isinstance(date_time, str) and date_time:
+        parsed = datetime.fromisoformat(date_time.replace("Z", "+00:00"))
+        localized = parsed.astimezone(zone) if parsed.tzinfo else parsed.replace(tzinfo=zone)
+        return localized, localized.strftime("%H:%M"), False
+
+    date_value = edge.get("date")
+    if isinstance(date_value, str) and date_value:
+        parsed_date = date.fromisoformat(date_value)
+        localized = datetime.combine(parsed_date, time.min, tzinfo=zone)
+        return localized, "All day", True
+
+    return fallback, "", False
+
+
+def _calendar_event_text(event: dict[str, Any]) -> str:
+    parts = []
+    for key in ("summary", "description", "location"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    return " ".join(parts).lower()
+
+
+def _calendar_appointment_type(event_text: str) -> str:
+    if "available" in event_text or "open slot" in event_text or "free" in event_text:
+        return "Open slot"
+    if "nhs" in event_text:
+        return "NHS Duty"
+    if "initial" in event_text or "consultation" in event_text:
+        return "Initial Consultation"
+    if "follow" in event_text or "review" in event_text:
+        return "Follow-up"
+    if "scan" in event_text or "procedure" in event_text:
+        return "Scan / Procedure"
+    return "Appointment"
+
+
+def _calendar_status(event_text: str, start_at: datetime, end_at: datetime, all_day: bool) -> str:
+    now = datetime.now(_clinic_timezone())
+    if "available" in event_text or "open slot" in event_text or "free" in event_text:
+        return "open"
+    if "nhs" in event_text:
+        return "nhs"
+    if all_day:
+        return "upcoming" if start_at.date() >= now.date() else "completed"
+    if end_at < now:
+        return "completed"
+    if start_at <= now <= end_at:
+        return "in_progress"
+    return "upcoming"
+
+
+def _calendar_event_to_schedule_item(
+    event: dict[str, Any],
+    *,
+    calendar_id: str,
+    sort_order: int,
+    synced_at: str,
+) -> ClinicScheduleItem:
+    fallback = datetime.now(_clinic_timezone())
+    start_at, start_label, all_day = _calendar_edge_datetime(event.get("start"), fallback)
+    end_at, end_label, _ = _calendar_edge_datetime(event.get("end"), start_at)
+    raw_external_id = event.get("id")
+    external_event_id = raw_external_id if isinstance(raw_external_id, str) and raw_external_id else start_at.isoformat()
+    event_text = _calendar_event_text(event)
+    raw_summary = event.get("summary")
+    summary = _truncate(raw_summary, 120) if isinstance(raw_summary, str) and raw_summary else "Busy"
+    raw_etag = event.get("etag")
     return {
-        "status": "preview",
-        "sourceOfTruth": "google_calendar",
-        "writeMode": "read_only_cache",
-        "externalWrites": 0,
-        "eventsRead": event_count,
-        "appointmentsCached": event_count,
-        "message": "Calendar sync path is read-only: appointments are read from Google Calendar and cached locally.",
-        **schedule,
+        "clinic_id": CLINIC_ID,
+        "event_id": f"gcal-{_safe_external_fragment(external_event_id)}",
+        "day_key": f"{start_at:%a} {start_at.day}",
+        "day_label": f"{start_at:%A} {start_at.day} {start_at:%b}",
+        "day_type": "nhs" if "nhs" in event_text else "private",
+        "start_time": start_label or "All day",
+        "end_time": end_label or ("All day" if all_day else start_label),
+        "external_calendar_id": calendar_id,
+        "external_etag": raw_etag if isinstance(raw_etag, str) else "",
+        "external_event_id": external_event_id,
+        "last_synced_at": synced_at,
+        "patient_id": "",
+        "patient_name": summary,
+        "source_provider": "google_calendar",
+        "appointment_type": _calendar_appointment_type(event_text),
+        "status": _calendar_status(event_text, start_at, end_at, all_day),
+        "sort_order": sort_order,
     }
+
+
+def _replace_google_schedule_cache(items: list[ClinicScheduleItem]) -> None:
+    for existing in query_clinic_schedule(CLINIC_ID, scan_index_forward=True, consistent_read=True):
+        if existing["source_provider"] == "google_calendar":
+            delete_clinic_schedule(CLINIC_ID, existing["event_id"])
+    for item in items:
+        put_clinic_schedule(item)
+
+
+def _gmail_headers(message: dict[str, Any]) -> dict[str, str]:
+    payload = message.get("payload")
+    raw_headers = payload.get("headers") if isinstance(payload, dict) else None
+    headers: dict[str, str] = {}
+    if not isinstance(raw_headers, list):
+        return headers
+    for raw_header in raw_headers:
+        if not isinstance(raw_header, dict):
+            continue
+        name = raw_header.get("name")
+        value = raw_header.get("value")
+        if isinstance(name, str) and isinstance(value, str):
+            headers[name.lower()] = value
+    return headers
+
+
+def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) -> datetime:
+    raw_internal_date = message.get("internalDate")
+    if isinstance(raw_internal_date, str) and raw_internal_date.isdigit():
+        return datetime.fromtimestamp(int(raw_internal_date) / 1000, tz=timezone.utc)
+    raw_date = headers.get("date", "")
+    if raw_date:
+        try:
+            parsed = parsedate_to_datetime(raw_date)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _patient_lookup_by_email() -> dict[str, ClinicPatientsItem]:
+    return {item["email"].strip().lower(): item for item in _list_patient_items() if item["email"].strip()}
+
+
+def _is_clinic_message(
+    *,
+    headers: dict[str, str],
+    snippet: str,
+    patient_by_email: dict[str, ClinicPatientsItem],
+) -> bool:
+    sender_email = parseaddr(headers.get("from", ""))[1].lower()
+    if sender_email and sender_email in patient_by_email:
+        return True
+    text = f"{headers.get('subject', '')} {snippet}".lower()
+    return any(keyword in text for keyword in CLINIC_MESSAGE_KEYWORDS)
+
+
+def _infer_gmail_action_type(text: str) -> tuple[str, str]:
+    lowered = text.lower()
+    if "reschedule" in lowered or "cancel" in lowered or "move" in lowered:
+        return "reschedule", "action"
+    if "follow-up" in lowered or "follow up" in lowered or "review" in lowered:
+        return "reminder", "info"
+    if "referral" in lowered or "consultation" in lowered or "appointment" in lowered or "book" in lowered:
+        return "enquiry", "new"
+    return "enquiry", "new"
+
+
+def _draft_reply_for_message(patient_name: str, summary: str) -> str:
+    first_name = patient_name.split()[0] if patient_name and patient_name != "Unknown sender" else "there"
+    return (
+        f"Dear {first_name},\n\n"
+        "Thank you for your message. I have noted your request"
+        f"{': ' + summary if summary else ''}.\n\n"
+        "Dr. Shalini will review this and we will come back to you shortly.\n\n"
+        "Warm regards,\n"
+        "Dr. Shalini's Clinic"
+    )
+
+
+def _gmail_message_to_action_item(
+    message: dict[str, Any],
+    *,
+    patient_by_email: dict[str, ClinicPatientsItem],
+    synced_at: str,
+) -> ClinicActionsItem | None:
+    message_id = message.get("id")
+    if not isinstance(message_id, str) or not message_id:
+        return None
+    headers = _gmail_headers(message)
+    snippet = html.unescape(str(message.get("snippet") or ""))
+    if not _is_clinic_message(headers=headers, snippet=snippet, patient_by_email=patient_by_email):
+        return None
+
+    sender_name, sender_email = parseaddr(headers.get("from", ""))
+    matched_patient = patient_by_email.get(sender_email.lower()) if sender_email else None
+    patient_name = matched_patient["name"] if matched_patient else sender_name or sender_email or "Unknown sender"
+    patient_id = matched_patient["patient_id"] if matched_patient else ""
+    subject = headers.get("subject", "").strip()
+    summary = _truncate(subject or snippet or "New Gmail message", 120)
+    source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
+    action_type, priority = _infer_gmail_action_type(f"{subject} {snippet}")
+    created_at = _gmail_message_datetime(message, headers)
+    thread_id = message.get("threadId")
+    localized = created_at.astimezone(_clinic_timezone())
+
+    return {
+        "clinic_id": CLINIC_ID,
+        "action_id": f"gmail-{_safe_external_fragment(message_id)}",
+        "action_type": action_type,
+        "priority": priority,
+        "status": "needs_approval",
+        "patient_id": patient_id,
+        "patient_name": patient_name,
+        "time_label": localized.strftime("%I:%M %p").lstrip("0"),
+        "source_summary": summary,
+        "source_message": source_message,
+        "draft_message": _draft_reply_for_message(patient_name, summary),
+        "external_draft_id": "",
+        "external_sent_message_id": "",
+        "final_message": "",
+        "source_provider": "gmail",
+        "source_thread_id": thread_id if isinstance(thread_id, str) else "",
+        "source_message_id": message_id,
+        "approved_at": "",
+        "approved_by": "",
+        "completed_at": "",
+        "completion_note": "",
+        "created_at": created_at.astimezone(timezone.utc).isoformat(),
+        "updated_at": synced_at,
+    }
+
+
+def _replace_open_gmail_action_candidates(items: list[ClinicActionsItem]) -> None:
+    for existing in query_clinic_actions(CLINIC_ID, scan_index_forward=True, consistent_read=True):
+        if existing["source_provider"] == "gmail" and existing["status"] != "completed":
+            delete_clinic_actions(CLINIC_ID, existing["action_id"])
+    for item in items:
+        put_clinic_actions(item)
+
+
+def _sync_google_calendar() -> dict[str, Any]:
+    try:
+        integration, client = _google_client_for_integration("google_calendar")
+        calendar_id = integration["calendar_id"] or "primary"
+        time_min, time_max = _calendar_sync_window()
+        events = [
+            event
+            for event in client.list_calendar_events(
+                calendar_id=calendar_id,
+                time_min=time_min,
+                time_max=time_max,
+                max_results=50,
+            )
+            if event.get("status") != "cancelled"
+        ]
+        synced_at = _now()
+        schedule_items = [
+            _calendar_event_to_schedule_item(event, calendar_id=calendar_id, sort_order=index + 1, synced_at=synced_at)
+            for index, event in enumerate(events)
+        ]
+        _replace_google_schedule_cache(schedule_items)
+        _mark_integration_success("google_calendar", synced_at)
+        schedule = _list_schedule()
+        return {
+            "status": "synced",
+            "sourceOfTruth": "google_calendar",
+            "writeMode": "read_only_cache",
+            "externalWrites": 0,
+            "eventsRead": len(events),
+            "appointmentsCached": len(schedule_items),
+            "message": "Calendar read completed. The local schedule cache was refreshed; Google Calendar was not changed.",
+            **schedule,
+        }
+    except (GoogleWorkspaceError, RuntimeError) as exc:
+        _mark_integration_failure("google_calendar", str(exc))
+        raise RuntimeError(str(exc)) from exc
 
 
 def _scan_gmail_inbox() -> dict[str, Any]:
-    gmail_actions = [item for item in _list_action_items() if item["source_provider"] == "gmail"]
-    return {
-        "status": "preview",
-        "sourceOfTruth": "gmail",
-        "writeMode": "read_inbox_prepare_in_app_drafts",
-        "externalWrites": 0,
-        "messagesScanned": len(gmail_actions),
-        "proposedActions": len(gmail_actions),
-        "message": "Gmail scan path is read-only: messages become proposed action records and in-app drafts only.",
-        "actions": [_action_dto(item) for item in gmail_actions],
-    }
+    try:
+        _, client = _google_client_for_integration("gmail")
+        messages = client.list_gmail_message_metadata(query=GMAIL_SCAN_QUERY, max_results=GMAIL_SCAN_MAX_MESSAGES)
+        patient_by_email = _patient_lookup_by_email()
+        synced_at = _now()
+        action_items: list[ClinicActionsItem] = []
+        for message in messages:
+            item = _gmail_message_to_action_item(message, patient_by_email=patient_by_email, synced_at=synced_at)
+            if item is None:
+                continue
+            existing = get_clinic_actions(CLINIC_ID, item["action_id"])
+            if existing and existing["status"] == "completed":
+                continue
+            action_items.append(item)
+
+        _replace_open_gmail_action_candidates(action_items)
+        _mark_integration_success("gmail", synced_at)
+        sorted_actions = sorted(action_items, key=lambda item: item["created_at"], reverse=True)
+        return {
+            "status": "synced",
+            "sourceOfTruth": "gmail",
+            "writeMode": "read_inbox_prepare_in_app_drafts",
+            "externalWrites": 0,
+            "messagesScanned": len(messages),
+            "proposedActions": len(action_items),
+            "message": "Gmail read completed. In-app action drafts were prepared; no email was sent or drafted in Gmail.",
+            "actions": [_action_dto(item) for item in sorted_actions],
+        }
+    except (GoogleWorkspaceError, RuntimeError) as exc:
+        _mark_integration_failure("gmail", str(exc))
+        raise RuntimeError(str(exc)) from exc
 
 
 def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
@@ -811,8 +1248,14 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
         except RuntimeError as exc:
             return json_response(400, {"error": str(exc)})
     if action == "sync_google_calendar":
-        return json_response(200, _sync_google_calendar())
+        try:
+            return json_response(200, _sync_google_calendar())
+        except RuntimeError as exc:
+            return json_response(400, {"error": str(exc)})
     if action == "scan_gmail_inbox":
-        return json_response(200, _scan_gmail_inbox())
+        try:
+            return json_response(200, _scan_gmail_inbox())
+        except RuntimeError as exc:
+            return json_response(400, {"error": str(exc)})
 
     return json_response(400, {"error": f"unsupported action: {action}"})

@@ -30,9 +30,10 @@ read-first and approval-gated.
   exchange in the Next.js server.
 - `connect_google_workspace` stores Auth.js-verified token material in AWS
   Secrets Manager and records connection metadata in `clinic_integrations`.
-- `sync_google_calendar` is the read-only Calendar sync path.
-- `scan_gmail_inbox` is the read-only Gmail scan path for preparing in-app
-  action drafts.
+- `sync_google_calendar` refreshes the OAuth token, reads Google Calendar
+  events for the next sync window, and refreshes the local schedule cache.
+- `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail metadata and
+  snippets matching clinic keywords, and prepares in-app action drafts.
 
 ## Google scopes
 
@@ -55,8 +56,7 @@ Official docs:
 
 ## Next implementation steps
 
-1. Implement a live Google client behind `agents/shared_utils/google_workspace.py`.
-2. Map Google Calendar events into `clinic_schedule`.
-3. Map Gmail messages/threads into `clinic_actions`.
-4. Add explicit, separate approval actions for `create_gmail_draft` and
-   `send_gmail_draft`.
+1. Add doctor-editable draft text before approval.
+2. Add a patient matching/review workflow for unknown Gmail senders.
+3. Add explicit, separate approval actions for `create_gmail_draft` and
+   `send_gmail_draft` when we are ready to move beyond in-app drafts.

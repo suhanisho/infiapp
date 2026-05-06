@@ -55,7 +55,12 @@ function parseLambdaPayload<T>(functionName: string, payloadText: string): T {
 
   const envelope = JSON.parse(payloadText) as LambdaEnvelope<T>;
   if (typeof envelope.statusCode === "number" && envelope.statusCode >= 400) {
-    throw new Error(`${functionName} failed with status ${envelope.statusCode}`);
+    let detail = `${functionName} failed with status ${envelope.statusCode}`;
+    const body = typeof envelope.body === "string" ? JSON.parse(envelope.body) as unknown : envelope.body;
+    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+      detail = body.error;
+    }
+    throw new Error(detail);
   }
 
   if (typeof envelope.body === "string") {
