@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App High-Level Design
 
-Last updated: 2026-05-07
+Last updated: 2026-05-07 (end of day)
 
 This document records the current product and system design for the clinic app.
 It is meant to be readable by a new contributor, a future Codex session, or
@@ -265,8 +265,9 @@ sequenceDiagram
 
     User->>Web: Click "Scan Gmail"
     Web->>Lambda: scan_gmail_inbox with signed actor assertion
-    Lambda->>Gmail: Read recent matching message metadata/snippets
+    Lambda->>Gmail: Read recent matching messages and full message content
     Lambda->>Lambda: Filter unrelated/non-patient email
+    Lambda->>Lambda: Extract triage and scheduling context
     Lambda->>DB: Upsert patient_request
     Lambda->>DB: Upsert linked review_reply action
     Lambda->>Web: Return requests/actions for review
@@ -274,7 +275,8 @@ sequenceDiagram
 
 Current Gmail behavior:
 
-- Reads recent Gmail messages matching clinic-oriented terms.
+- Lists recent Gmail messages matching clinic-oriented terms, then fetches full
+  read-only message content for likely clinic messages.
 - Filters obvious non-patient messages such as newsletters, no-reply senders,
   password resets, promotions, and generic marketing.
 - Creates or updates `clinic_patient_requests`.
@@ -285,16 +287,21 @@ Current Gmail behavior:
   billing/payment, and logistics.
 - Stores urgency, risk level, whether doctor review is required, suggested next
   action, patient emotional tone, triage confidence, and triage reason.
+- Stores patient-stated scheduling constraints and clinical context anchors,
+  such as scan/test/procedure dates and times, in request metadata.
 - For urgent clinical concern language, the app prepares an escalation-style
   draft and does not propose appointment availability windows.
-- Drafts a suggested reply for review.
+- Drafts a suggested reply for review using the original patient message and
+  extracted context.
 - Does not send email.
 - Does not create Gmail drafts.
 - Does not label, archive, or mutate Gmail messages.
 
-## Daily Cockpit
+## Rounds
 
-The first app screen is the Daily Cockpit, not a raw inbox.
+The first app screen is `Rounds`, not a raw inbox. It is the daily cockpit for
+the doctor and uses the premium dark navy/mint design direction from
+`weave_clinic_rounds_redesign.html`.
 
 It has two current responsibilities:
 
@@ -304,10 +311,11 @@ It has two current responsibilities:
 - Show open actions that need attention, sorted so urgent and clinical-review
   items appear before routine admin/scheduling work.
 
-The cockpit still uses the same approval-gated child actions. Reviewing an
-action and clicking `Approve and store` only records the edited final text and
-audit state. It does not send email, create Gmail drafts, or change Google
-Calendar.
+Expanded request cards show the source email, triage, patient context, and an
+editable draft reply. `Rounds` still uses the same approval-gated child actions.
+Reviewing an action and clicking `Approve and store` only records the edited
+final text and audit state. It does not send email, create Gmail drafts, or
+change Google Calendar.
 
 ## Calendar Flow
 
@@ -357,6 +365,7 @@ Availability windows are based on:
 - appointment duration
 - existing busy calendar events
 - patient-stated constraints in the email
+- clinical context anchors in the email
 
 Examples of patient constraints:
 
@@ -368,6 +377,13 @@ Examples of patient constraints:
 - after 3 PM
 - before noon
 - between two times
+- after a scan/test/procedure
+
+Clinical context anchors are treated conservatively. For example, if a patient
+says their scan is on 15 May at 3:00 PM and asks for a follow-up afterwards,
+the app can propose windows from 4:30 PM on 15 May onward, assuming the doctor
+is free. If the patient gives only the date with no time, the app avoids
+same-day proposals and starts from the following day.
 
 Current appointment duration assumptions:
 
