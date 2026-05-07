@@ -9,6 +9,8 @@ import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAge
 type AgentBackendMode = "mock" | "aws_oidc";
 
 type LambdaEnvelope<T> = {
+  errorMessage?: string;
+  errorType?: string;
   statusCode?: number;
   body?: string | T;
 };
@@ -121,6 +123,20 @@ async function invokeLambda<T>(functionName: string, payload: object): Promise<T
   );
 
   const payloadText = response.Payload ? new TextDecoder().decode(response.Payload) : "";
+  if (response.FunctionError) {
+    let detail = `${functionName} failed: ${response.FunctionError}`;
+    if (payloadText) {
+      try {
+        const errorPayload = JSON.parse(payloadText) as LambdaEnvelope<unknown>;
+        if (typeof errorPayload.errorMessage === "string" && errorPayload.errorMessage) {
+          detail = errorPayload.errorMessage;
+        }
+      } catch {
+        detail = payloadText;
+      }
+    }
+    throw new Error(detail);
+  }
   return parseLambdaPayload<T>(functionName, payloadText);
 }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
 import hashlib
 import hmac
 from importlib.util import module_from_spec, spec_from_file_location
@@ -268,6 +269,9 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(action_item["patient_request_id"], request_item["patient_request_id"])
         self.assertNotEqual(action_item["action_id"], request_item["patient_request_id"])
         self.assertEqual(action_item["metadata"]["action_kind"], handler_module.REPLY_REVIEW_ACTION_KIND)
+        self.assertIsInstance(request_item["triage_confidence"], Decimal)
+        self.assertEqual(handler_module._patient_request_dto(request_item)["triageConfidence"], 0.72)
+        json.dumps(handler_module._patient_request_dto(request_item))
 
     def test_patient_request_merge_preserves_existing_state(self) -> None:
         with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):

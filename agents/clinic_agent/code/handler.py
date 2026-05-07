@@ -15,6 +15,7 @@ import os
 import re
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -678,6 +679,10 @@ def _optional_text(value: object) -> str | None:
     return None
 
 
+def _dynamodb_decimal(value: str) -> Any:
+    return Decimal(value)
+
+
 def _truncate(value: str, limit: int) -> str:
     normalized = " ".join(value.split())
     if len(normalized) <= limit:
@@ -749,7 +754,7 @@ def _patient_request_dto(item: ClinicPatientRequestsItem) -> dict[str, Any]:
         "sourceThreadId": _optional_text(item["source_thread_id"]),
         "status": item["status"],
         "timeLabel": item["time_label"],
-        "triageConfidence": item["triage_confidence"],
+        "triageConfidence": float(item["triage_confidence"]),
         "triageReason": item["triage_reason"],
         "updatedAt": item["updated_at"],
     }
@@ -1933,7 +1938,7 @@ def _gmail_message_to_patient_request_item(
         "intent": intent,
         "proposed_windows": slot_labels,
         "request_constraints": _slot_constraints_record(constraints),
-        "triage_confidence": 0.9 if matched_patient else 0.72,
+        "triage_confidence": _dynamodb_decimal("0.90") if matched_patient else _dynamodb_decimal("0.72"),
         "triage_reason": "Matched clinic scheduling language in Gmail metadata.",
         "status": "needs_approval",
         "final_message": "",
