@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App Handoff
 
-Last updated: 2026-05-07
+Last updated: 2026-05-07 (end of day)
 
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
@@ -11,8 +11,8 @@ For a fuller system overview, see `docs/high-level-design.md`.
 
 Build a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
 source of truth for appointments. Gmail is the source of patient communication.
-The app reads both, prepares patient requests and draft replies, and keeps the
-doctor in control of any completed action.
+The app reads both, prepares patient requests, triage, and draft replies, and
+keeps the doctor in control of any completed action.
 
 ## Current branch and deployment
 
@@ -23,6 +23,10 @@ doctor in control of any completed action.
 - Vercel project: `shalini-clinic-webui`
 - Deploy workflow: `.github/workflows/deploy.yml`
 - Deploys are manual `workflow_dispatch` runs against `build-clinic-mvp`.
+- Latest production code commit: `d7728b3` - Respect patient context in
+  appointment drafts.
+- Latest successful deploy run:
+  `https://github.com/suhanisho/infiapp/actions/runs/25518339853`
 
 ## Safety contract
 
@@ -114,8 +118,9 @@ Gmail:
 
 - User manually clicks `Scan Gmail`.
 - `scan_gmail_inbox` refreshes OAuth using the stored refresh token.
-- It reads recent Gmail message metadata/snippets matching clinic-oriented query
-  terms.
+- It lists recent Gmail messages matching clinic-oriented query terms, then
+  fetches full read-only message content for candidate messages so triage and
+  drafts can use the patient's original wording instead of snippets alone.
 - It filters out obvious non-patient messages, including newsletters, no-reply
   senders, promos, password resets, and marketing-style emails.
 - It stores the main request in `clinic_patient_requests` using
@@ -123,11 +128,14 @@ Gmail:
 - It adds intelligent triage fields to each patient request: request type,
   urgency, risk level, doctor-review requirement, suggested next action,
   patient emotional tone, confidence, and reason.
+- It extracts and persists `request_constraints`, including patient-stated
+  timing preferences and clinical context anchors such as scan/test/procedure
+  dates and times.
 - Urgent clinical concern language is routed to doctor review and gets an
   escalation-style in-app draft instead of calendar availability windows.
 - It upserts linked in-app action records in `clinic_actions` so the current
-  Daily Cockpit and approval/audit flow continue to work. Scans do not delete
-  durable open patient requests that fall out of the current Gmail result set.
+  Rounds and approval/audit flow continue to work. Scans do not delete durable
+  open patient requests that fall out of the current Gmail result set.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
 Approval:
@@ -161,6 +169,8 @@ Approval:
     asks for a follow-up after a scan at 3:00 PM, the app treats the earliest
     appointment time as 90 minutes later on the same day rather than simply
     moving to the next day.
+- Contextual scheduling constraints are stored on the patient request metadata
+  so future request-linked workflows can reuse the same interpretation.
 - Google Calendar supports appointment schedule booking pages, so a future mode
   could share a booking link instead of proposing windows. Keep this optional
   until we are comfortable with quality and patient experience.
@@ -175,17 +185,19 @@ Main app:
 Important UI decisions:
 
 - The app is mobile-first and doctor-facing, not a marketing page.
+- The first tab is `Rounds`. It follows the premium dark navy/mint visual
+  direction from `weave_clinic_rounds_redesign.html`.
+- `Rounds` is the daily cockpit: greeting, date, briefing, schedule overview,
+  and open actions that need attention.
 - Settings drawer has Google controls:
   - `Reconnect Google`
   - `Read Calendar`
   - `Scan Gmail`
-- Request cards expand to show source email and editable draft reply.
-- The first tab is the Daily Cockpit. It shows:
-  - summary overview of the day
-  - open actions that need attention, prioritised by triage
+- Request cards expand to show source email, triage, patient context, and an
+  editable draft reply.
 - Draft reply text is editable before `Approve and store`.
 - The bottom nav has:
-  - `Cockpit`
+  - `Rounds`
   - `Schedule`
   - `Patients`
 
@@ -237,21 +249,22 @@ before commits to avoid unrelated churn.
 
 ## Recent commits of interest
 
-- `39261d2` - Read Google Calendar and Gmail into clinic app
-- `7fe0a1a` - Suggest calendar slots in Gmail drafts
-- `1c8b06c` - Respect patient preferences in slot suggestions
-- `082e4af` - Offer availability windows and filter inbox noise
-- Current working changes after that add `practice_id` scoping,
-  `clinic_patient_requests` as the main request entity, child action IDs,
-  signed actor assertions, and practice member records.
+- `d7728b3` - Respect patient context in appointment drafts
+- `e781051` - Redesign clinic rounds experience
+- `edb32a8` - Add inbox triage and daily cockpit
+- `6834ea9` - Fix Gmail scan production errors
+- `8a7f55d` - Fix Google reconnect for practice workspaces
+- `1dff88b` - Add patient request workflow model
+- `0368378` - Document clinic app handoff decisions
 
 ## Suggested next steps
 
-1. Improve email triage with a real LLM/classifier step so the app can better
-   distinguish patient messages from unrelated inbox noise.
+1. Add a preview/audit panel showing why an email was included or ignored and
+   which patient constraints were extracted.
 2. Add patient matching/review for unknown senders before completing durable
    patient-linked requests.
-3. Add a preview/audit panel showing why an email was included or ignored.
+3. Improve email triage with a real LLM/classifier step while preserving
+   deterministic safety guardrails.
 4. Consider a configurable Google Calendar appointment schedule booking link.
 5. Later, add explicit approval-gated actions for:
    - creating a Gmail draft
