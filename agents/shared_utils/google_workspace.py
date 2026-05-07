@@ -192,7 +192,7 @@ class GoogleWorkspaceHttpClient:
             message_id = message_ref.get("id")
             if not isinstance(message_id, str) or not message_id:
                 continue
-            messages.append(self.get_gmail_message_metadata(message_id))
+            messages.append(self.get_gmail_message_full(message_id))
         return messages
 
     def get_gmail_message_metadata(self, message_id: str) -> JsonObject:
@@ -207,6 +207,10 @@ class GoogleWorkspaceHttpClient:
                 ("metadataHeaders", "Date"),
             ],
         )
+
+    def get_gmail_message_full(self, message_id: str) -> JsonObject:
+        url = f"{GMAIL_MESSAGES_URL}/{urllib.parse.quote(message_id, safe='')}"
+        return self._get(url, {"format": "full"})
 
 
 def required_google_scopes() -> dict[str, list[str]]:

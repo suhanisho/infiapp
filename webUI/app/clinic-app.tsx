@@ -123,6 +123,33 @@ function metadataBoolean(action: ClinicAction, key: string) {
   return metadataValue(action, key) === true;
 }
 
+function metadataRecord(action: ClinicAction, key: string) {
+  const value = metadataValue(action, key);
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function requestConstraintSummary(action: ClinicAction) {
+  const directSummary = metadataString(action, "constraint_summary");
+  if (directSummary) {
+    return directSummary;
+  }
+  const constraints = metadataRecord(action, "request_constraints");
+  const summary = constraints.constraint_summary;
+  if (typeof summary === "string" && summary) {
+    return summary;
+  }
+  const earliestAt = constraints.earliest_appointment_at;
+  if (typeof earliestAt === "string" && earliestAt) {
+    return `Earliest appointment: ${new Date(earliestAt).toLocaleString([], {
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      month: "short",
+    })}`;
+  }
+  return "";
+}
+
 function actionNeedsDoctorReview(action: ClinicAction) {
   return (
     metadataBoolean(action, "requires_doctor_review") ||
@@ -321,6 +348,7 @@ function Rounds({
           const triageReason = metadataString(action, "triage_reason");
           const suggestedNextAction = metadataString(action, "suggested_next_action");
           const emotionalTone = metadataString(action, "patient_emotional_tone", "neutral");
+          const constraintSummary = requestConstraintSummary(action);
           return (
             <article key={action.actionId} className={`action-card priority-${action.priority}`}>
               <button
@@ -358,6 +386,13 @@ function Rounds({
                       <span>Triage</span>
                       {triageReason ? <p>{triageReason}</p> : null}
                       {suggestedNextAction ? <p>{suggestedNextAction}</p> : null}
+                    </div>
+                  ) : null}
+
+                  {constraintSummary ? (
+                    <div className="detail-block">
+                      <span>Patient context</span>
+                      <p>{constraintSummary}</p>
                     </div>
                   ) : null}
 

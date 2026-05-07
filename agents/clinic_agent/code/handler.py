@@ -14,7 +14,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any, TypedDict, cast
@@ -79,6 +79,49 @@ WEEKDAY_ALIASES = {
     5: ("saturday", "saturdays", "sat"),
     6: ("sunday", "sundays", "sun"),
 }
+MONTH_ALIASES = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+MONTH_PATTERN = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+CONTEXT_ANCHOR_TERMS = (
+    "scan",
+    "ultrasound",
+    "blood test",
+    "test",
+    "procedure",
+    "mri",
+    "ct",
+    "x-ray",
+    "xray",
+)
+ANCHOR_FOLLOW_UP_TERMS = ("after", "afterward", "afterwards", "following", "post", "once")
+ANCHOR_START_ONLY_BUFFER_MINUTES = 90
 CLINIC_MESSAGE_KEYWORDS = (
     "appointment",
     "booking",
@@ -255,8 +298,12 @@ class SlotConstraints(TypedDict):
     preferred_weekdays: set[int]
     earliest_date: date | None
     latest_date: date | None
+    earliest_at: datetime | None
     daily_start: time | None
     daily_end: time | None
+    anchor_event: str
+    anchor_at: datetime | None
+    constraint_summary: str
     notes: list[str]
 
 
@@ -1457,6 +1504,56 @@ def _gmail_headers(message: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
+def _decode_gmail_body_data(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
+    except (ValueError, TypeError):
+        return ""
+
+
+def _html_to_text(value: str) -> str:
+    without_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
+    without_tags = re.sub(r"(?s)<[^>]+>", " ", without_scripts)
+    return html.unescape(without_tags)
+
+
+def _gmail_payload_text_parts(payload: object) -> tuple[list[str], list[str]]:
+    if not isinstance(payload, dict):
+        return [], []
+
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    mime_type = str(payload.get("mimeType", "")).lower()
+    body = payload.get("body")
+    body_data = body.get("data") if isinstance(body, dict) else None
+    decoded = _decode_gmail_body_data(body_data)
+    if decoded:
+        if "html" in mime_type:
+            html_parts.append(_html_to_text(decoded))
+        else:
+            plain_parts.append(decoded)
+
+    raw_parts = payload.get("parts")
+    if isinstance(raw_parts, list):
+        for part in raw_parts:
+            nested_plain, nested_html = _gmail_payload_text_parts(part)
+            plain_parts.extend(nested_plain)
+            html_parts.extend(nested_html)
+
+    return plain_parts, html_parts
+
+
+def _gmail_message_text(message: dict[str, Any]) -> str:
+    plain_parts, html_parts = _gmail_payload_text_parts(message.get("payload"))
+    body_text = "\n".join(part for part in [*plain_parts, *html_parts] if part.strip())
+    if body_text.strip():
+        return _truncate(body_text, 4000)
+    return _truncate(html.unescape(str(message.get("snippet") or "")), 4000)
+
+
 def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) -> datetime:
     raw_internal_date = message.get("internalDate")
     if isinstance(raw_internal_date, str) and raw_internal_date.isdigit():
@@ -1728,6 +1825,12 @@ def _request_appointment_details(text: str) -> tuple[str, int]:
         return "Meet & Greet", 15
     if "follow-up" in lowered or "follow up" in lowered or "review" in lowered:
         return "Follow-up", 20
+    if (
+        any(anchor in lowered for anchor in ("scan", "ultrasound", "test", "procedure"))
+        and any(term in lowered for term in ANCHOR_FOLLOW_UP_TERMS)
+        and any(term in lowered for term in ("appointment", "consultation", "see dr", "see the doctor"))
+    ):
+        return "Follow-up", 20
     if "scan" in lowered or "procedure" in lowered:
         return "Scan / Procedure", 30
     if "consultation" in lowered or "referral" in lowered or "appointment" in lowered or "book" in lowered:
@@ -1740,8 +1843,12 @@ def _empty_slot_constraints() -> SlotConstraints:
         "preferred_weekdays": set(),
         "earliest_date": None,
         "latest_date": None,
+        "earliest_at": None,
         "daily_start": None,
         "daily_end": None,
+        "anchor_event": "",
+        "anchor_at": None,
+        "constraint_summary": "",
         "notes": [],
     }
 
@@ -1783,7 +1890,146 @@ def _weekday_mentions(text: str) -> set[int]:
     return weekdays
 
 
-def _slot_constraints_from_text(text: str) -> SlotConstraints:
+def _human_date(value: date) -> str:
+    return f"{value:%A} {value.day} {value:%b}"
+
+
+def _human_time(value: time) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _month_number(raw_month: str) -> int | None:
+    return MONTH_ALIASES.get(raw_month.strip().lower().rstrip("."))
+
+
+def _future_date_for_day_month(day: int, month: int, today: date) -> date | None:
+    try:
+        candidate = date(today.year, month, day)
+    except ValueError:
+        return None
+    if candidate < today - timedelta(days=30):
+        try:
+            return date(today.year + 1, month, day)
+        except ValueError:
+            return None
+    return candidate
+
+
+def _future_date_for_day(day: int, today: date) -> date | None:
+    try:
+        candidate = date(today.year, today.month, day)
+    except ValueError:
+        return None
+    if candidate < today:
+        month = today.month + 1
+        year = today.year
+        if month > 12:
+            month = 1
+            year += 1
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            return None
+    return candidate
+
+
+def _date_mentions(text: str, today: date) -> list[date]:
+    mentions: list[date] = []
+    day_month_pattern = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({MONTH_PATTERN})\b")
+    month_day_pattern = re.compile(rf"\b({MONTH_PATTERN})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b")
+    bare_day_pattern = re.compile(r"\b(?:on|for|scheduled for)\s+(\d{1,2})(?:st|nd|rd|th)?\b")
+
+    for match in day_month_pattern.finditer(text):
+        month = _month_number(match.group(2))
+        if month is None:
+            continue
+        candidate = _future_date_for_day_month(int(match.group(1)), month, today)
+        if candidate is not None:
+            mentions.append(candidate)
+
+    for match in month_day_pattern.finditer(text):
+        month = _month_number(match.group(1))
+        if month is None:
+            continue
+        candidate = _future_date_for_day_month(int(match.group(2)), month, today)
+        if candidate is not None:
+            mentions.append(candidate)
+
+    if not mentions:
+        for match in bare_day_pattern.finditer(text):
+            candidate = _future_date_for_day(int(match.group(1)), today)
+            if candidate is not None:
+                mentions.append(candidate)
+
+    return mentions
+
+
+def _clock_mentions(text: str) -> list[time]:
+    mentions: list[time] = []
+    for match in re.finditer(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text):
+        raw_hour = match.group(1)
+        raw_minute = match.group(2) or "00"
+        parsed = _text_hour_to_time(raw_hour, match.group(3))
+        if parsed is not None:
+            mentions.append(parsed.replace(minute=int(raw_minute)))
+
+    for match in re.finditer(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b", text):
+        mentions.append(time(int(match.group(1)), int(match.group(2))))
+
+    return mentions
+
+
+def _anchor_label(raw_anchor: str) -> str:
+    if raw_anchor in {"xray", "x-ray"}:
+        return "x-ray"
+    return raw_anchor
+
+
+def _text_implies_anchor_follow_up(text: str, anchor_window: str) -> bool:
+    if any(term in anchor_window for term in ANCHOR_FOLLOW_UP_TERMS):
+        return True
+    return any(re.search(rf"\b{term}\b.{0,100}\b(?:scan|ultrasound|test|procedure|mri|ct|x-?ray)\b", text) for term in ANCHOR_FOLLOW_UP_TERMS)
+
+
+def _apply_context_anchor_constraints(constraints: SlotConstraints, text: str, today: date, zone: tzinfo) -> None:
+    for raw_anchor in CONTEXT_ANCHOR_TERMS:
+        anchor_pattern = re.compile(rf"\b{re.escape(raw_anchor)}\b")
+        for match in anchor_pattern.finditer(text):
+            window_start = max(0, match.start() - 90)
+            window_end = min(len(text), match.end() + 120)
+            window = text[window_start:window_end]
+            if not _text_implies_anchor_follow_up(text, window):
+                continue
+
+            date_candidates = _date_mentions(window, today)
+            if not date_candidates:
+                continue
+            anchor_date = date_candidates[0]
+            time_candidates = _clock_mentions(window)
+            anchor_event = _anchor_label(raw_anchor)
+            constraints["anchor_event"] = anchor_event
+
+            if time_candidates:
+                anchor_at = datetime.combine(anchor_date, time_candidates[0], tzinfo=zone)
+                earliest_at = anchor_at + timedelta(minutes=ANCHOR_START_ONLY_BUFFER_MINUTES)
+                constraints["anchor_at"] = anchor_at
+                constraints["earliest_at"] = earliest_at
+                constraints["earliest_date"] = anchor_date
+                constraints["constraint_summary"] = (
+                    f"after your {anchor_event} on {_human_date(anchor_date)} at {_human_time(time_candidates[0])}"
+                )
+                constraints["notes"].append(f"after {anchor_event}")
+                return
+
+            earliest_date = anchor_date + timedelta(days=1)
+            constraints["anchor_at"] = datetime.combine(anchor_date, time.min, tzinfo=zone)
+            constraints["earliest_date"] = earliest_date
+            constraints["constraint_summary"] = f"after your {anchor_event} on {_human_date(anchor_date)}"
+            constraints["notes"].append(f"after {anchor_event}")
+            return
+
+
+def _slot_constraints_from_text(text: str, appointment_kind: str = "") -> SlotConstraints:
     lowered = text.lower()
     zone = _clinic_timezone()
     today = datetime.now(zone).date()
@@ -1802,6 +2048,9 @@ def _slot_constraints_from_text(text: str) -> SlotConstraints:
     elif "this week" in lowered:
         constraints["earliest_date"] = today
         constraints["latest_date"] = today + timedelta(days=(6 - today.weekday()))
+
+    if appointment_kind != "Scan / Procedure":
+        _apply_context_anchor_constraints(constraints, lowered, today, zone)
 
     if "morning" in lowered:
         constraints["daily_start"] = _merge_daily_start(constraints["daily_start"], time(9, 0))
@@ -1920,6 +2169,45 @@ def _slot_label(start_at: datetime, end_at: datetime, appointment_kind: str, dur
     )
 
 
+def _slot_label_start_at(label: str) -> datetime | None:
+    match = re.search(
+        r"\b[A-Za-z]+\s+(\d{1,2})\s+([A-Za-z]{3,}),\s+(?:between\s+)?(\d{1,2})(?::(\d{2}))?\s*(AM|PM)",
+        label,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    month = _month_number(match.group(2))
+    if month is None:
+        return None
+    today = datetime.now(_clinic_timezone()).date()
+    slot_date = _future_date_for_day_month(int(match.group(1)), month, today)
+    if slot_date is None:
+        return None
+    slot_time = _text_hour_to_time(match.group(3), match.group(5))
+    if slot_time is None:
+        return None
+    slot_time = slot_time.replace(minute=int(match.group(4) or "00"))
+    return datetime.combine(slot_date, slot_time, tzinfo=_clinic_timezone())
+
+
+def _filter_slot_labels_by_constraints(slot_labels: list[str], constraints: SlotConstraints) -> list[str]:
+    if constraints["earliest_at"] is None and constraints["earliest_date"] is None:
+        return slot_labels
+
+    filtered: list[str] = []
+    for label in slot_labels:
+        slot_start = _slot_label_start_at(label)
+        if slot_start is None:
+            continue
+        if constraints["earliest_at"] is not None and slot_start < constraints["earliest_at"]:
+            continue
+        if constraints["earliest_date"] is not None and slot_start.date() < constraints["earliest_date"]:
+            continue
+        filtered.append(label)
+    return filtered
+
+
 def _suggest_free_slot_labels(
     *,
     appointment_kind: str,
@@ -1939,6 +2227,8 @@ def _suggest_free_slot_labels(
 
     for day_offset in range(SLOT_SEARCH_DAYS):
         current_day = (now + timedelta(days=day_offset)).date()
+        if active_constraints["earliest_at"] is not None and current_day < active_constraints["earliest_at"].date():
+            continue
         if active_constraints["earliest_date"] is not None and current_day < active_constraints["earliest_date"]:
             continue
         if active_constraints["latest_date"] is not None and current_day > active_constraints["latest_date"]:
@@ -1965,6 +2255,8 @@ def _suggest_free_slot_labels(
         day_start = datetime.combine(current_day, start_time, tzinfo=zone)
         day_end = datetime.combine(current_day, end_time, tzinfo=zone)
         cursor = max(day_start, earliest_start) if current_day == earliest_start.date() else day_start
+        if active_constraints["earliest_at"] is not None and current_day == active_constraints["earliest_at"].date():
+            cursor = max(cursor, active_constraints["earliest_at"])
         cursor = _round_up_to_step(cursor, SLOT_STEP_MINUTES)
         day_busy_windows = [
             (max(start_at - buffer_delta, day_start), min(end_at + buffer_delta, day_end))
@@ -2020,6 +2312,7 @@ def _draft_reply_for_message(
     appointment_kind: str,
     slot_labels: list[str],
     request_text: str = "",
+    constraints: SlotConstraints | None = None,
     triage: TriageResult | None = None,
 ) -> str:
     first_name = patient_name.split()[0] if patient_name and patient_name != "Unknown sender" else "there"
@@ -2034,12 +2327,20 @@ def _draft_reply_for_message(
 
     request_focus = _request_focus_phrase(request_text, appointment_kind)
     summary_note = _reply_summary_note(summary)
+    constraint_summary = constraints["constraint_summary"] if constraints else ""
+    if constraint_summary:
+        intro = (
+            f"Thank you for your message. I understand you would like help with {request_focus} "
+            f"{constraint_summary}.{summary_note} "
+        )
+    else:
+        intro = f"Thank you for your message about {request_focus}.{summary_note} "
     if slot_labels:
         formatted_slots = "\n".join(f"- {slot}" for slot in slot_labels)
         return (
             f"Dear {first_name},\n\n"
-            f"Thank you for your message about {request_focus}.{summary_note} "
-            "I have checked Dr. Shalini's calendar and these windows currently look available:\n\n"
+            f"{intro}"
+            "I have checked Dr. Shalini's calendar with that context in mind, and these windows currently look available:\n\n"
             f"{formatted_slots}\n\n"
             "Please let me know what exact time within one of these windows works best, "
             "and Dr. Shalini will confirm the appointment.\n\n"
@@ -2049,8 +2350,7 @@ def _draft_reply_for_message(
 
     return (
         f"Dear {first_name},\n\n"
-        "Thank you for your message. I have noted your request"
-        f"{': ' + summary if summary else ''}.\n\n"
+        f"{intro.strip()}\n\n"
         "Dr. Shalini will review this and we will come back to you shortly.\n\n"
         "Warm regards,\n"
         "Dr. Shalini's Clinic"
@@ -2062,8 +2362,12 @@ def _slot_constraints_record(constraints: SlotConstraints) -> dict[str, Any]:
         "preferred_weekdays": [WEEKDAY_ALIASES[weekday][0] for weekday in sorted(constraints["preferred_weekdays"])],
         "earliest_date": constraints["earliest_date"].isoformat() if constraints["earliest_date"] is not None else "",
         "latest_date": constraints["latest_date"].isoformat() if constraints["latest_date"] is not None else "",
+        "earliest_appointment_at": constraints["earliest_at"].isoformat() if constraints["earliest_at"] is not None else "",
         "daily_start": constraints["daily_start"].strftime("%H:%M") if constraints["daily_start"] is not None else "",
         "daily_end": constraints["daily_end"].strftime("%H:%M") if constraints["daily_end"] is not None else "",
+        "anchor_event": constraints["anchor_event"],
+        "anchor_at": constraints["anchor_at"].isoformat() if constraints["anchor_at"] is not None else "",
+        "constraint_summary": constraints["constraint_summary"],
         "notes": list(constraints["notes"]),
     }
 
@@ -2111,7 +2415,9 @@ def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicAc
             "appointment_type": item["appointment_type"],
             "patient_emotional_tone": item["patient_emotional_tone"],
             "patient_request_id": item["patient_request_id"],
+            "request_constraints": item["request_constraints"],
             "request_type": item["request_type"],
+            "constraint_summary": str(item["request_constraints"].get("constraint_summary", "")),
             "requires_doctor_review": item["requires_doctor_review"],
             "risk_level": item["risk_level"],
             "suggested_next_action": item["suggested_next_action"],
@@ -2143,7 +2449,8 @@ def _gmail_message_to_patient_request_item(
         return None
     headers = _gmail_headers(message)
     snippet = html.unescape(str(message.get("snippet") or ""))
-    if not _is_clinic_message(headers=headers, snippet=snippet, patient_by_email=patient_by_email):
+    message_text = _gmail_message_text(message) or snippet
+    if not _is_clinic_message(headers=headers, snippet=f"{snippet} {message_text}", patient_by_email=patient_by_email):
         return None
 
     sender_name, sender_email = parseaddr(headers.get("from", ""))
@@ -2151,13 +2458,13 @@ def _gmail_message_to_patient_request_item(
     patient_name = matched_patient["name"] if matched_patient else sender_name or sender_email or "Unknown sender"
     patient_id = matched_patient["patient_id"] if matched_patient else ""
     subject = headers.get("subject", "").strip()
-    summary = _truncate(subject or snippet or "New Gmail message", 120)
-    source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
-    request_text = f"{subject} {snippet}"
+    summary = _truncate(subject or message_text or snippet or "New Gmail message", 120)
+    source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{message_text}".strip(), 1200)
+    request_text = f"{subject} {message_text}"
     intent, _ = _infer_gmail_action_type(request_text)
     triage = _triage_gmail_request(request_text, matched_patient=matched_patient is not None)
     appointment_kind, duration_minutes = _request_appointment_details(request_text)
-    constraints = _slot_constraints_from_text(request_text)
+    constraints = _slot_constraints_from_text(request_text, appointment_kind=appointment_kind)
     slot_labels = (
         []
         if triage["risk_level"] == "high"
@@ -2167,6 +2474,7 @@ def _gmail_message_to_patient_request_item(
             constraints=constraints,
         )
     )
+    slot_labels = _filter_slot_labels_by_constraints(slot_labels, constraints)
     created_at = _gmail_message_datetime(message, headers)
     thread_id = message.get("threadId")
     localized = created_at.astimezone(_clinic_timezone())
@@ -2177,6 +2485,7 @@ def _gmail_message_to_patient_request_item(
         appointment_kind=appointment_kind,
         slot_labels=slot_labels,
         request_text=request_text,
+        constraints=constraints,
         triage=triage,
     )
 

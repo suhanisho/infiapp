@@ -368,6 +368,26 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIsNotNone(constraints["earliest_date"])
         self.assertIsNotNone(constraints["latest_date"])
 
+    def test_scan_anchor_constraints_capture_same_day_after_time(self) -> None:
+        appointment_kind, duration_minutes = handler_module._request_appointment_details(
+            "Could I book an appointment after my scan on 15th May at 3pm?"
+        )
+        constraints = handler_module._slot_constraints_from_text(
+            "Could I book an appointment after my scan on 15th May at 3pm?",
+            appointment_kind=appointment_kind,
+        )
+
+        self.assertEqual(appointment_kind, "Follow-up")
+        self.assertEqual(duration_minutes, 20)
+        self.assertIsNotNone(constraints["earliest_at"])
+        earliest_at = constraints["earliest_at"]
+        self.assertEqual(earliest_at.month, 5)
+        self.assertEqual(earliest_at.day, 15)
+        self.assertEqual(earliest_at.hour, 16)
+        self.assertEqual(earliest_at.minute, 30)
+        self.assertEqual(constraints["earliest_date"], earliest_at.date())
+        self.assertIn("after your scan", constraints["constraint_summary"])
+
     def test_non_patient_marketing_email_is_ignored(self) -> None:
         headers = {
             "from": "Newsletter <newsletter@example.com>",
@@ -409,6 +429,82 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(len(slots), 1)
         self.assertTrue(all(expected_day in slot for slot in slots))
         self.assertIn("between 2:00 PM and 5:00 PM", slots[0])
+
+    def test_slot_suggestions_respect_anchor_earliest_datetime(self) -> None:
+        zone = handler_module._clinic_timezone()
+        target_date = datetime.now(zone).date() + timedelta(days=3)
+        earliest_at = datetime.combine(target_date, time(15, 30), tzinfo=zone)
+        constraints = handler_module._empty_slot_constraints()
+        constraints["earliest_date"] = target_date
+        constraints["earliest_at"] = earliest_at
+
+        with (
+            patch.object(
+                handler_module,
+                "_weekday_availability",
+                return_value={target_date.weekday(): (time(9, 0), time(17, 0))},
+            ),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+            patch.object(handler_module, "_clinic_lunch_window", return_value=None),
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+        ):
+            slots = handler_module._suggest_free_slot_labels(
+                appointment_kind="Follow-up",
+                duration_minutes=20,
+                constraints=constraints,
+                limit=1,
+            )
+
+        expected_day = f"{target_date:%A} {target_date.day} {target_date:%b}"
+        self.assertEqual(len(slots), 1)
+        self.assertIn(expected_day, slots[0])
+        self.assertIn("between 3:30 PM and 5:00 PM", slots[0])
+
+    def test_gmail_full_body_context_anchors_follow_up_slots(self) -> None:
+        zone = handler_module._clinic_timezone()
+        scan_date = datetime.now(zone).date() + timedelta(days=8)
+        body = (
+            f"Hello, could I book a follow-up with Dr Shalini after my scan on "
+            f"{scan_date.day} {scan_date:%b} at 3pm?"
+        )
+        encoded_body = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
+        message = {
+            "id": "gmail-message-scan-anchor",
+            "threadId": "gmail-thread-scan-anchor",
+            "internalDate": "1778067600000",
+            "snippet": "Hello, could I book a follow-up?",
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_body},
+                "headers": [
+                    {"name": "From", "value": "Nina Shah <nina@example.com>"},
+                    {"name": "Subject", "value": "Follow-up appointment"},
+                ],
+            },
+        }
+        captured_constraints: dict[str, Any] = {}
+
+        def fake_slot_suggestions(**kwargs: Any) -> list[str]:
+            captured_constraints.update(kwargs["constraints"])
+            return [
+                f"{scan_date:%A} {scan_date.day} {scan_date:%b}, between 4:30 PM and 5:30 PM "
+                "(20-minute Follow-up)"
+            ]
+
+        with patch.object(handler_module, "_suggest_free_slot_labels", side_effect=fake_slot_suggestions):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        self.assertEqual(captured_constraints["earliest_at"].hour, 16)
+        self.assertEqual(captured_constraints["earliest_at"].minute, 30)
+        self.assertIn("after your scan", request_item["request_constraints"]["constraint_summary"])
+        self.assertIn("after your scan", request_item["draft_message"])
+        self.assertIn("4:30 PM", request_item["draft_message"])
 
     def test_connect_google_workspace_stores_metadata_without_returning_tokens(self) -> None:
         token_response = {

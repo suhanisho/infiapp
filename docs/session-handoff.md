@@ -157,6 +157,10 @@ Approval:
   - Existing busy calendar events
   - Patient-stated constraints from the email, such as weekdays, next week,
     morning/afternoon/evening/lunchtime, after/before, and between time ranges.
+  - Context anchors such as a scan/test/procedure date and time. If a patient
+    asks for a follow-up after a scan at 3:00 PM, the app treats the earliest
+    appointment time as 90 minutes later on the same day rather than simply
+    moving to the next day.
 - Google Calendar supports appointment schedule booking pages, so a future mode
   could share a booking link instead of proposing windows. Keep this optional
   until we are comfortable with quality and patient experience.
