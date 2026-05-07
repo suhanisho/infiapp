@@ -542,8 +542,6 @@ export function ClinicApp({
 
   useEffect(() => {
     async function loadClinicData() {
-      const initialParams = new URLSearchParams(window.location.search);
-      const googleOAuthConnected = initialParams.get("googleOAuth") === "connected";
       setLoading(true);
       setError("");
       try {
@@ -552,9 +550,7 @@ export function ClinicApp({
         setPatients(patientData.patients);
         setDays(scheduleData.days);
         setSettings(settingsData);
-        setIntegrations(
-          googleOAuthConnected ? connectedIntegrationState(integrationData.integrations) : integrationData.integrations,
-        );
+        setIntegrations(integrationData.integrations);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "Unable to load clinic data");
       } finally {
@@ -573,8 +569,21 @@ export function ClinicApp({
     }
 
     if (googleOAuthStatus === "connected") {
-      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
-      setIntegrations((current) => connectedIntegrationState(current));
+      setNotice("Google authorization completed. Checking the saved connection...");
+      void (async () => {
+        try {
+          const integrationData = await loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations");
+          const connected = integrationData.integrations.some((integration) => integration.status === "connected");
+          setIntegrations(integrationData.integrations);
+          if (connected) {
+            setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
+          } else {
+            setError("Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.");
+          }
+        } catch (refreshError) {
+          setError(refreshError instanceof Error ? refreshError.message : "Unable to check Google connection");
+        }
+      })();
     } else {
       setError(params.get("reason") || "Google connection did not complete.");
     }

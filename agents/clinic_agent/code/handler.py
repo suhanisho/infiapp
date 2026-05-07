@@ -621,6 +621,7 @@ SEED_SETTINGS: list[ClinicSettingsItem] = [
 ]
 
 GOOGLE_SCOPES = required_google_scopes()
+GOOGLE_TOKEN_SECRET_DEFAULT_ROOT_PREFIX = "shalini-clinic"
 SEED_INTEGRATIONS: list[ClinicIntegrationsItem] = [
     {
         "clinic_id": CLINIC_ID,
@@ -1009,7 +1010,10 @@ def _store_google_token_secret(account_email: str, token_response: dict[str, Any
 
     import boto3
 
-    configured_prefix = os.environ.get("GOOGLE_TOKEN_SECRET_PREFIX", "").strip()
+    configured_prefix = os.environ.get(
+        "GOOGLE_TOKEN_SECRET_PREFIX",
+        GOOGLE_TOKEN_SECRET_DEFAULT_ROOT_PREFIX,
+    ).strip().strip("/")
     token_secret_prefix = (
         f"{configured_prefix}/{_practice_id()}/clinic_agent/google"
         if configured_prefix

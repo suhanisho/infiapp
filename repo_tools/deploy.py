@@ -41,7 +41,7 @@ VERCEL_PROJECT_NAME = "shalini-clinic-webui"
 VERCEL_AGENT_ROLE_NAME = f"vercel-{VERCEL_PROJECT_NAME}-agent-invoke"
 VERCEL_AGENT_POLICY_NAME = "invoke-external-agents"
 GOOGLE_AGENT_NAME = "clinic_agent"
-GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX = "shalini-clinic/clinic_agent/google"
+GOOGLE_TOKEN_SECRET_DEFAULT_ROOT_PREFIX = "shalini-clinic"
 VERCEL_MANAGED_ENV_KEYS = {
     "AWS_REGION",
     "AWS_ROLE_ARN",
@@ -309,8 +309,8 @@ def ensure_agent_role(agent_name: str) -> str:
                 "Resource": table_arns,
             }
         )
-    token_secret_prefix = google_token_secret_prefix(agent_name)
-    if token_secret_prefix:
+    token_secret_arns = google_token_secret_arns(agent_name, account_id)
+    if token_secret_arns:
         statements.append(
             {
                 "Effect": "Allow",
@@ -321,10 +321,7 @@ def ensure_agent_role(agent_name: str) -> str:
                     "secretsmanager:PutSecretValue",
                     "secretsmanager:UpdateSecret",
                 ],
-                "Resource": (
-                    f"arn:aws:secretsmanager:{env_value('AWS_REGION')}:{account_id}:"
-                    f"secret:{token_secret_prefix}/*"
-                ),
+                "Resource": token_secret_arns,
             }
         )
     policy = {
@@ -402,11 +399,23 @@ def zip_agent(agent_dir: Path, output_path: Path) -> None:
         zip_directory(build_dir, output_path)
 
 
-def google_token_secret_prefix(agent_name: str) -> str:
+def google_token_secret_root_prefix(agent_name: str) -> str:
     if agent_name != GOOGLE_AGENT_NAME:
         return ""
-    configured = env_value("GOOGLE_TOKEN_SECRET_PREFIX", GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX)
-    return configured.strip().strip("/") or GOOGLE_TOKEN_SECRET_DEFAULT_PREFIX
+    configured = env_value("GOOGLE_TOKEN_SECRET_PREFIX", GOOGLE_TOKEN_SECRET_DEFAULT_ROOT_PREFIX)
+    return configured.strip().strip("/") or GOOGLE_TOKEN_SECRET_DEFAULT_ROOT_PREFIX
+
+
+def google_token_secret_arns(agent_name: str, account_id: str) -> list[str]:
+    token_secret_root = google_token_secret_root_prefix(agent_name)
+    if not token_secret_root:
+        return []
+    region = env_value("AWS_REGION")
+    arn_prefix = f"arn:aws:secretsmanager:{region}:{account_id}:secret:"
+    return [
+        f"{arn_prefix}{token_secret_root}/*/clinic_agent/google/*",
+        f"{arn_prefix}{token_secret_root}/clinic_agent/google/*",
+    ]
 
 
 def agent_environment_args(agent_name: str) -> list[str]:

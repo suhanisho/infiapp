@@ -5,6 +5,8 @@ Last updated: 2026-05-07
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
 
+For a fuller system overview, see `docs/high-level-design.md`.
+
 ## Product goal
 
 Build a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
@@ -198,7 +200,8 @@ GitHub Actions variables currently expected:
 - Optional: `CLINIC_DEMO_SEED_DATA=true` to show demo patients/actions for a
   practice. New real practice IDs do not receive demo patient data by default.
 - Optional: `GOOGLE_TOKEN_SECRET_PREFIX` as a root prefix; the Lambda appends
-  `practice_id/clinic_agent/google`.
+  `practice_id/clinic_agent/google`. If omitted, the root prefix defaults to
+  `shalini-clinic`.
 
 The deploy script syncs relevant env vars to Vercel and Lambda.
 
