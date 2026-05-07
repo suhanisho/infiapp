@@ -20,6 +20,7 @@ type ScheduleDay = ClinicAgentListScheduleOutput["days"][number];
 type Settings = ClinicAgentListSettingsOutput;
 type Integration = ClinicAgentListIntegrationsOutput["integrations"][number];
 type Tab = "actions" | "schedule" | "patients";
+type ScheduleEvent = ScheduleDay["events"][number];
 
 const emptySettings: Settings = {
   appointmentTypes: [],
@@ -60,15 +61,32 @@ function statusLabel(status: string) {
 
 function actionTypeLabel(type: string) {
   const labels: Record<string, string> = {
+    appointment_request: "Appointment",
+    billing_payment: "Billing",
     enquiry: "New enquiry",
+    general_logistics: "Logistics",
+    prescription_admin_request: "Prescription/admin",
     reschedule: "Reschedule",
+    reschedule_cancellation: "Reschedule",
     nhs: "NHS note",
     reminder: "Follow-up",
+    routine_clinical_question: "Clinical question",
+    test_report_result_query: "Results query",
+    urgent_clinical_concern: "Urgent clinical",
   };
   return labels[type] || type;
 }
 
 function priorityClass(priority: string) {
+  if (priority === "urgent") {
+    return "tone-red";
+  }
+  if (priority === "clinical") {
+    return "tone-purple";
+  }
+  if (priority === "admin") {
+    return "tone-neutral";
+  }
   if (priority === "new") {
     return "tone-blue";
   }
@@ -90,20 +108,126 @@ function initials(name: string) {
     .slice(0, 2);
 }
 
-function ActionQueue({
+function metadataValue(action: ClinicAction, key: string) {
+  const metadata = action.metadata || {};
+  return metadata[key];
+}
+
+function metadataString(action: ClinicAction, key: string, fallback = "") {
+  const value = metadataValue(action, key);
+  return typeof value === "string" && value ? value : fallback;
+}
+
+function metadataBoolean(action: ClinicAction, key: string) {
+  return metadataValue(action, key) === true;
+}
+
+function actionNeedsDoctorReview(action: ClinicAction) {
+  return (
+    metadataBoolean(action, "requires_doctor_review") ||
+    metadataString(action, "risk_level") === "high" ||
+    metadataString(action, "urgency_level") === "urgent" ||
+    action.priority === "urgent" ||
+    action.priority === "clinical"
+  );
+}
+
+function actionSortRank(action: ClinicAction) {
+  if (metadataString(action, "urgency_level") === "urgent" || action.priority === "urgent") {
+    return 0;
+  }
+  if (actionNeedsDoctorReview(action)) {
+    return 1;
+  }
+  if (action.priority === "action") {
+    return 2;
+  }
+  if (action.priority === "new") {
+    return 3;
+  }
+  return 4;
+}
+
+function nextAttentionSummary(openActions: ClinicAction[]) {
+  const urgent = openActions.filter((action) => actionSortRank(action) === 0).length;
+  const clinical = openActions.filter((action) => actionNeedsDoctorReview(action)).length;
+  if (urgent > 0) {
+    return `${urgent} urgent item${urgent === 1 ? "" : "s"} should be reviewed first.`;
+  }
+  if (clinical > 0) {
+    return `${clinical} clinical review item${clinical === 1 ? "" : "s"} need your attention.`;
+  }
+  if (openActions.length > 0) {
+    return `${openActions.length} open action${openActions.length === 1 ? "" : "s"} ready for review.`;
+  }
+  return "No open actions waiting for review.";
+}
+
+function activeScheduleEvents(days: ScheduleDay[]) {
+  const events: ScheduleEvent[] = [];
+  for (const day of days) {
+    for (const event of day.events) {
+      if (event.status !== "open") {
+        events.push(event);
+      }
+    }
+  }
+  return events;
+}
+
+function scheduleEventsForToday(days: ScheduleDay[]) {
+  const todayLabel = new Date()
+    .toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      weekday: "long",
+    })
+    .replace(",", "");
+  const today = days.find((day) => day.dayLabel === todayLabel);
+  return activeScheduleEvents(today ? [today] : days.slice(0, 1));
+}
+
+function nextEventLabel(events: ScheduleEvent[]) {
+  const nextEvent = events[0];
+  if (!nextEvent) {
+    return "No appointments loaded";
+  }
+  return `${nextEvent.startTime} ${nextEvent.patientName}`;
+}
+
+function DailyCockpit({
   actions,
+  days,
   loading,
   onApprove,
   approvingId,
 }: {
   actions: ClinicAction[];
+  days: ScheduleDay[];
   loading: boolean;
   onApprove: (action: ClinicAction, finalMessage: string) => Promise<void>;
   approvingId: string | null;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
-  const pendingCount = actions.filter((action) => action.status !== "completed").length;
+  const openActions = useMemo(
+    () =>
+      [...actions]
+        .filter((action) => action.status !== "completed")
+        .sort((first, second) => actionSortRank(first) - actionSortRank(second)),
+    [actions],
+  );
+  const pendingCount = openActions.length;
+  const clinicalReviewCount = openActions.filter(actionNeedsDoctorReview).length;
+  const appointmentActionCount = openActions.filter((action) =>
+    ["appointment_request", "reschedule_cancellation", "enquiry", "reschedule"].includes(action.actionType),
+  ).length;
+  const scheduleEvents = scheduleEventsForToday(days);
+  const dayLabel = new Date().toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    weekday: "long",
+  });
 
   useEffect(() => {
     setDraftEdits((current) => {
@@ -120,33 +244,56 @@ function ActionQueue({
   return (
     <section className="screen-panel" aria-labelledby="actions-title">
       <div className="section-heading">
-        <p className="date-line">Saturday 2 May, 1:42 PM</p>
-        <h1 id="actions-title">
-          {loading && actions.length === 0
-            ? "Loading requests"
-            : pendingCount > 0
-              ? `${pendingCount} items need review`
-              : "All requests completed"}
-        </h1>
+        <p className="date-line">{dayLabel}</p>
+        <h1 id="actions-title">Daily cockpit</h1>
+      </div>
+
+      <div className="cockpit-overview" aria-label="Summary overview">
+        <article className="summary-tile">
+          <span>Appointments</span>
+          <strong>{scheduleEvents.length}</strong>
+          <small>{nextEventLabel(scheduleEvents)}</small>
+        </article>
+        <article className="summary-tile">
+          <span>Open actions</span>
+          <strong>{pendingCount}</strong>
+          <small>{nextAttentionSummary(openActions)}</small>
+        </article>
+        <article className="summary-tile">
+          <span>Clinical review</span>
+          <strong>{clinicalReviewCount}</strong>
+          <small>All clinical replies require approval</small>
+        </article>
+        <article className="summary-tile">
+          <span>Scheduling</span>
+          <strong>{appointmentActionCount}</strong>
+          <small>Calendar stays read-only</small>
+        </article>
       </div>
 
       <div className="briefing">
         <span className="briefing-label">Today</span>
-        <p>
-          Four private appointments are on the schedule. Next patient: Sarah Mitchell at 1:30 PM. The clinic is free
-          from 4:00 PM.
-        </p>
+        <p>{nextAttentionSummary(openActions)} {scheduleEvents.length > 0 ? `Next appointment: ${nextEventLabel(scheduleEvents)}.` : "Read Calendar to load today's appointment context."}</p>
+      </div>
+
+      <div className="queue-heading">
+        <h2>Open actions needing attention</h2>
+        <span>{pendingCount}</span>
       </div>
 
       {loading ? <div className="empty-state">Loading patient requests...</div> : null}
 
       <div className="stack-list">
-        {actions.map((action) => {
+        {openActions.map((action) => {
           const expanded = expandedId === action.actionId;
-          const completed = action.status === "completed";
           const draftValue = draftEdits[action.actionId] ?? action.finalMessage ?? action.draftMessage ?? "";
+          const urgency = metadataString(action, "urgency_level", "routine");
+          const risk = metadataString(action, "risk_level", "low");
+          const triageReason = metadataString(action, "triage_reason");
+          const suggestedNextAction = metadataString(action, "suggested_next_action");
+          const emotionalTone = metadataString(action, "patient_emotional_tone", "neutral");
           return (
-            <article key={action.actionId} className={`action-card ${completed ? "is-completed" : ""}`}>
+            <article key={action.actionId} className={`action-card priority-${action.priority}`}>
               <button
                 type="button"
                 className="row-button"
@@ -158,11 +305,25 @@ function ActionQueue({
                   <strong>{action.patientName || action.sourceSummary}</strong>
                   <small>{action.patientName ? action.sourceSummary : action.sourceMessage}</small>
                 </span>
-                <span className={`status-pill status-${action.status}`}>{statusLabel(action.status)}</span>
+                <span className={`status-pill status-${action.status}`}>{urgency}</span>
               </button>
 
               {expanded ? (
                 <div className="expanded-content">
+                  <div className="triage-strip" aria-label="Triage details">
+                    <span className={`status-pill ${risk === "high" ? "tone-red" : risk === "medium" ? "tone-purple" : "tone-green"}`}>Risk: {risk}</span>
+                    <span className="status-pill">{actionNeedsDoctorReview(action) ? "Doctor review" : "Admin review"}</span>
+                    <span className="status-pill">Tone: {emotionalTone.replaceAll("_", " ")}</span>
+                  </div>
+
+                  {triageReason || suggestedNextAction ? (
+                    <div className="detail-block">
+                      <span>Triage</span>
+                      {triageReason ? <p>{triageReason}</p> : null}
+                      {suggestedNextAction ? <p>{suggestedNextAction}</p> : null}
+                    </div>
+                  ) : null}
+
                   {action.sourceMessage ? (
                     <div className="detail-block">
                       <span>Source</span>
@@ -173,27 +334,21 @@ function ActionQueue({
                   {action.draftMessage ? (
                     <div className="detail-block draft-block">
                       <span>Draft reply</span>
-                      {completed ? (
-                        <p>{action.finalMessage || action.draftMessage}</p>
-                      ) : (
-                        <textarea
-                          className="draft-editor"
-                          value={draftValue}
-                          onChange={(event) =>
-                            setDraftEdits((current) => ({
-                              ...current,
-                              [action.actionId]: event.target.value,
-                            }))
-                          }
-                          rows={10}
-                        />
-                      )}
+                      <textarea
+                        className="draft-editor"
+                        value={draftValue}
+                        onChange={(event) =>
+                          setDraftEdits((current) => ({
+                            ...current,
+                            [action.actionId]: event.target.value,
+                          }))
+                        }
+                        rows={10}
+                      />
                     </div>
                   ) : null}
 
-                  {completed ? (
-                    <p className="audit-note">{action.completionNote || "Completed action is stored for audit."}</p>
-                  ) : action.draftMessage ? (
+                  {action.draftMessage ? (
                     <div className="action-controls">
                       <button
                         type="button"
@@ -213,6 +368,8 @@ function ActionQueue({
           );
         })}
       </div>
+
+      {!loading && openActions.length === 0 ? <div className="empty-state">No open actions need attention.</div> : null}
     </section>
   );
 }
@@ -578,7 +735,9 @@ export function ClinicApp({
           if (connected) {
             setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
           } else {
-            setError("Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.");
+          setError(
+            "Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.",
+          );
           }
         } catch (refreshError) {
           setError(refreshError instanceof Error ? refreshError.message : "Unable to check Google connection");
@@ -676,7 +835,7 @@ export function ClinicApp({
   }
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "actions", label: "Requests" },
+    { key: "actions", label: "Cockpit" },
     { key: "schedule", label: "Schedule" },
     { key: "patients", label: "Patients" },
   ];
@@ -716,7 +875,13 @@ export function ClinicApp({
 
       <div className="app-content">
         {tab === "actions" ? (
-          <ActionQueue actions={actions} loading={loading} onApprove={approveAction} approvingId={approvingId} />
+          <DailyCockpit
+            actions={actions}
+            days={days}
+            loading={loading}
+            onApprove={approveAction}
+            approvingId={approvingId}
+          />
         ) : null}
         {tab === "schedule" ? <Schedule days={days} /> : null}
         {tab === "patients" ? <Patients patients={patients} /> : null}

@@ -134,8 +134,14 @@ Important fields:
 - `source_message_id`
 - `source_thread_id`
 - `request_type`
+- `urgency_level`
+- `risk_level`
+- `requires_doctor_review`
+- `suggested_next_action`
+- `patient_emotional_tone`
 - `status`
 - `triage_reason`
+- `triage_confidence`
 - `proposed_windows`
 - `draft_reply`
 - `final_reply`
@@ -273,10 +279,35 @@ Current Gmail behavior:
   password resets, promotions, and generic marketing.
 - Creates or updates `clinic_patient_requests`.
 - Creates or updates a linked child action in `clinic_actions`.
+- Classifies likely patient messages into triage categories such as appointment
+  request, reschedule/cancellation, urgent clinical concern, routine clinical
+  question, test/report/result query, prescription/admin request,
+  billing/payment, and logistics.
+- Stores urgency, risk level, whether doctor review is required, suggested next
+  action, patient emotional tone, triage confidence, and triage reason.
+- For urgent clinical concern language, the app prepares an escalation-style
+  draft and does not propose appointment availability windows.
 - Drafts a suggested reply for review.
 - Does not send email.
 - Does not create Gmail drafts.
 - Does not label, archive, or mutate Gmail messages.
+
+## Daily Cockpit
+
+The first app screen is the Daily Cockpit, not a raw inbox.
+
+It has two current responsibilities:
+
+- Show a summary overview of the day, including appointment count, next
+  appointment, open action count, clinical-review count, and scheduling action
+  count.
+- Show open actions that need attention, sorted so urgent and clinical-review
+  items appear before routine admin/scheduling work.
+
+The cockpit still uses the same approval-gated child actions. Reviewing an
+action and clicking `Approve and store` only records the edited final text and
+audit state. It does not send email, create Gmail drafts, or change Google
+Calendar.
 
 ## Calendar Flow
 

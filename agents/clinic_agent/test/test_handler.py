@@ -251,7 +251,11 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIn("Monday 11 May", body["actions"][0]["draftMessage"])
         self.assertEqual(body["actions"][0]["patientRequestId"], "gmail-gmail-message-live-1")
         self.assertNotEqual(body["actions"][0]["actionId"], body["actions"][0]["patientRequestId"])
+        self.assertEqual(body["actions"][0]["metadata"]["request_type"], "appointment_request")
+        self.assertEqual(body["actions"][0]["metadata"]["urgency_level"], "routine")
         self.assertEqual(body["patientRequests"][0]["patientRequestId"], "gmail-gmail-message-live-1")
+        self.assertEqual(body["patientRequests"][0]["requestType"], "appointment_request")
+        self.assertFalse(body["patientRequests"][0]["requiresDoctorReview"])
         upsert_requests.assert_called_once()
         mark_success.assert_called_once()
 
@@ -269,9 +273,46 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(action_item["patient_request_id"], request_item["patient_request_id"])
         self.assertNotEqual(action_item["action_id"], request_item["patient_request_id"])
         self.assertEqual(action_item["metadata"]["action_kind"], handler_module.REPLY_REVIEW_ACTION_KIND)
+        self.assertEqual(action_item["action_type"], "appointment_request")
+        self.assertEqual(action_item["metadata"]["risk_level"], "low")
         self.assertIsInstance(request_item["triage_confidence"], Decimal)
         self.assertEqual(handler_module._patient_request_dto(request_item)["triageConfidence"], 0.72)
         json.dumps(handler_module._patient_request_dto(request_item))
+
+    def test_urgent_clinical_message_is_triaged_for_doctor_review(self) -> None:
+        message = {
+            "id": "gmail-message-urgent-1",
+            "threadId": "gmail-thread-urgent-1",
+            "internalDate": "1778067600000",
+            "snippet": "I am 28 weeks pregnant and have had reduced fetal movement since last night.",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Aisha Khan <aisha@example.com>"},
+                    {"name": "Subject", "value": "Worried about movement"},
+                ]
+            },
+        }
+
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=["Monday 11 May, 9:00 AM"]):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        action_item = handler_module._patient_request_to_action_item(request_item)
+        dto = handler_module._patient_request_dto(request_item)
+
+        self.assertEqual(request_item["request_type"], "urgent_clinical_concern")
+        self.assertEqual(request_item["urgency_level"], "urgent")
+        self.assertEqual(request_item["risk_level"], "high")
+        self.assertTrue(request_item["requires_doctor_review"])
+        self.assertEqual(request_item["proposed_windows"], [])
+        self.assertIn("urgent review", request_item["draft_message"])
+        self.assertEqual(action_item["priority"], "urgent")
+        self.assertEqual(dto["requestType"], "urgent_clinical_concern")
 
     def test_patient_request_merge_preserves_existing_state(self) -> None:
         with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):

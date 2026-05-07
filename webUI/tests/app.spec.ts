@@ -3,7 +3,8 @@ import { expect, test } from "@playwright/test";
 test("clinic app stores approved actions without external side effects", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open local demo" }).click();
-  await expect(page.getByRole("heading", { name: /items need review/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Daily cockpit" })).toBeVisible();
+  await expect(page.getByText("Open actions needing attention")).toBeVisible();
 
   await page.getByRole("button", { name: /Rachel Davies/i }).click();
   await expect(page.getByText("Draft reply")).toBeVisible();

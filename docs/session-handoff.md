@@ -120,8 +120,13 @@ Gmail:
   senders, promos, password resets, and marketing-style emails.
 - It stores the main request in `clinic_patient_requests` using
   `practice_id + patient_request_id`.
+- It adds intelligent triage fields to each patient request: request type,
+  urgency, risk level, doctor-review requirement, suggested next action,
+  patient emotional tone, confidence, and reason.
+- Urgent clinical concern language is routed to doctor review and gets an
+  escalation-style in-app draft instead of calendar availability windows.
 - It upserts linked in-app action records in `clinic_actions` so the current
-  Requests UI and approval/audit flow continue to work. Scans do not delete
+  Daily Cockpit and approval/audit flow continue to work. Scans do not delete
   durable open patient requests that fall out of the current Gmail result set.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
@@ -171,9 +176,12 @@ Important UI decisions:
   - `Read Calendar`
   - `Scan Gmail`
 - Request cards expand to show source email and editable draft reply.
+- The first tab is the Daily Cockpit. It shows:
+  - summary overview of the day
+  - open actions that need attention, prioritised by triage
 - Draft reply text is editable before `Approve and store`.
 - The bottom nav has:
-  - `Requests`
+  - `Cockpit`
   - `Schedule`
   - `Patients`
 

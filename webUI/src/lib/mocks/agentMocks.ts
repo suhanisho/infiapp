@@ -51,7 +51,7 @@ const nowIso = () => new Date().toISOString();
 const actions: MockAction[] = [
   {
     actionId: "act_001",
-    actionType: "enquiry",
+    actionType: "appointment_request",
     priority: "new",
     practiceId: mockPracticeId,
     status: "needs_approval",
@@ -69,7 +69,17 @@ const actions: MockAction[] = [
       "Dear Rachel,\n\nThank you for getting in touch, and welcome. I have the following afternoon slots available:\n\n- Wednesday 30 Apr at 2:00 PM\n- Friday 2 May at 3:15 PM\n- Monday 5 May at 2:30 PM\n\nInitial consultations are 45 minutes. Please let me know which works best and I will confirm your booking.\n\nWarm regards,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
-    metadata: {},
+    metadata: {
+      request_type: "appointment_request",
+      urgency_level: "routine",
+      risk_level: "low",
+      requires_doctor_review: false,
+      suggested_next_action: "Review proposed availability windows and approve the reply text.",
+      patient_emotional_tone: "neutral",
+      triage_category: "appointment_request",
+      triage_confidence: "0.72",
+      triage_reason: "Message matched patient scheduling language.",
+    },
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -80,7 +90,7 @@ const actions: MockAction[] = [
   },
   {
     actionId: "act_002",
-    actionType: "reschedule",
+    actionType: "reschedule_cancellation",
     priority: "action",
     practiceId: mockPracticeId,
     status: "needs_approval",
@@ -98,7 +108,17 @@ const actions: MockAction[] = [
       "Dear Fatima,\n\nOf course, no problem at all. I can offer the following options for next week:\n\n- Monday 5 May at 11:00 AM\n- Tuesday 6 May at 10:30 AM\n- Tuesday 6 May at 3:00 PM\n\nPlease let me know your preference.\n\nBest wishes,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
-    metadata: {},
+    metadata: {
+      request_type: "reschedule_cancellation",
+      urgency_level: "soon",
+      risk_level: "low",
+      requires_doctor_review: false,
+      suggested_next_action: "Review the draft and confirm the scheduling next step with the patient.",
+      patient_emotional_tone: "neutral",
+      triage_category: "reschedule_cancellation",
+      triage_confidence: "0.86",
+      triage_reason: "Message is about changing an existing appointment.",
+    },
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -125,7 +145,17 @@ const actions: MockAction[] = [
     draftMessage: null,
     externalDraftId: null,
     externalSentMessageId: null,
-    metadata: {},
+    metadata: {
+      request_type: "schedule_note",
+      urgency_level: "routine",
+      risk_level: "low",
+      requires_doctor_review: false,
+      suggested_next_action: "No external calendar action is available in the MVP.",
+      patient_emotional_tone: "neutral",
+      triage_category: "schedule_note",
+      triage_confidence: "0.80",
+      triage_reason: "Calendar note loaded as read-only context.",
+    },
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -136,7 +166,7 @@ const actions: MockAction[] = [
   },
   {
     actionId: "act_004",
-    actionType: "reminder",
+    actionType: "follow_up",
     priority: "info",
     practiceId: mockPracticeId,
     status: "needs_approval",
@@ -153,7 +183,17 @@ const actions: MockAction[] = [
       "Dear Priya,\n\nI hope you are well. It has been about four weeks since your last visit and I would like to schedule a follow-up to review your progress. I have availability on:\n\n- Friday 2 May at 10:00 AM\n- Monday 5 May at 9:30 AM\n\nPlease let me know if either works, or suggest a time that suits you better.\n\nBest wishes,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
-    metadata: {},
+    metadata: {
+      request_type: "follow_up",
+      urgency_level: "routine",
+      risk_level: "low",
+      requires_doctor_review: false,
+      suggested_next_action: "Review the follow-up draft and decide the next admin step.",
+      patient_emotional_tone: "neutral",
+      triage_category: "follow_up",
+      triage_confidence: "0.80",
+      triage_reason: "Follow-up is due based on prior clinic timing.",
+    },
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -388,24 +428,45 @@ function clone<T>(value: T): T {
 }
 
 function patientRequestFromAction(action: MockAction) {
+  const requestType = typeof action.metadata.request_type === "string" ? action.metadata.request_type : action.actionType;
+  const urgencyLevel = typeof action.metadata.urgency_level === "string" ? action.metadata.urgency_level : "routine";
+  const riskLevel = typeof action.metadata.risk_level === "string" ? action.metadata.risk_level : "low";
+  const patientEmotionalTone =
+    typeof action.metadata.patient_emotional_tone === "string" ? action.metadata.patient_emotional_tone : "neutral";
+  const suggestedNextAction =
+    typeof action.metadata.suggested_next_action === "string"
+      ? action.metadata.suggested_next_action
+      : "Review this request before responding.";
+  const triageCategory =
+    typeof action.metadata.triage_category === "string" ? action.metadata.triage_category : requestType;
+  const triageConfidence =
+    typeof action.metadata.triage_confidence === "string" ? Number(action.metadata.triage_confidence) : 0.9;
+  const triageReason =
+    typeof action.metadata.triage_reason === "string"
+      ? action.metadata.triage_reason
+      : "Mock patient request generated from the demo action queue.";
   return {
-    appointmentType: action.actionType === "reminder" ? "Follow-up" : "Initial Consultation",
+    appointmentType: action.actionType === "follow_up" ? "Follow-up" : "Initial Consultation",
     approvedAt: action.approvedAt,
     approvedBy: action.approvedBy,
     completedAt: action.completedAt,
     completionNote: action.completionNote,
     createdAt: action.createdAt,
     draftMessage: action.draftMessage,
-    durationMinutes: action.actionType === "reminder" ? 20 : 45,
+    durationMinutes: action.actionType === "follow_up" ? 20 : 45,
     finalMessage: action.finalMessage,
     intent: action.actionType,
     patientEmail: null,
+    patientEmotionalTone,
     patientId: action.patientId,
     patientName: action.patientName,
     patientRequestId: action.patientRequestId || action.actionId,
     practiceId: action.practiceId,
     proposedWindows: [],
     requestConstraints: {},
+    requestType,
+    requiresDoctorReview: action.metadata.requires_doctor_review === true,
+    riskLevel,
     sourceExcerpt: action.sourceMessage,
     sourceMessageId: action.sourceMessageId,
     sourceProvider: action.sourceProvider,
@@ -413,9 +474,12 @@ function patientRequestFromAction(action: MockAction) {
     sourceSummary: action.sourceSummary,
     sourceThreadId: action.sourceThreadId,
     status: action.status,
+    suggestedNextAction,
     timeLabel: action.timeLabel,
-    triageConfidence: 0.9,
-    triageReason: "Mock patient request generated from the demo action queue.",
+    triageCategory,
+    triageConfidence,
+    triageReason,
+    urgencyLevel,
     updatedAt: action.updatedAt,
   };
 }

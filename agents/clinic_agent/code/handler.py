@@ -58,7 +58,9 @@ DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = (
     "in:inbox newer_than:30d "
-    "(appointment OR booking OR book OR consultation OR referral OR meet OR greet OR intro OR reschedule OR cancel OR follow-up)"
+    "(appointment OR booking OR book OR consultation OR referral OR meet OR greet OR intro OR reschedule OR cancel "
+    "OR follow-up OR pregnant OR pregnancy OR bleeding OR pain OR movement OR result OR report OR prescription "
+    "OR invoice OR payment OR form OR directions)"
 )
 GMAIL_SCAN_MAX_MESSAGES = 10
 DEFAULT_SLOT_SUGGESTIONS = 3
@@ -160,6 +162,89 @@ BOOKING_PHRASES = (
     "arrange a consultation",
     "schedule an appointment",
 )
+URGENT_CLINICAL_TERMS = (
+    "reduced fetal movement",
+    "no fetal movement",
+    "heavy bleeding",
+    "severe bleeding",
+    "severe pain",
+    "unbearable pain",
+    "chest pain",
+    "shortness of breath",
+    "fainting",
+    "dizzy and faint",
+    "high fever",
+    "fever",
+    "ectopic",
+    "miscarriage",
+    "waters broke",
+    "water broke",
+    "contractions",
+)
+ROUTINE_CLINICAL_TERMS = (
+    "symptom",
+    "symptoms",
+    "pain",
+    "bleeding",
+    "cramps",
+    "cramping",
+    "discharge",
+    "pregnant",
+    "pregnancy",
+    "period",
+    "hormone",
+    "fertility",
+    "pcos",
+    "endometriosis",
+    "menopause",
+)
+RESULT_QUERY_TERMS = (
+    "result",
+    "results",
+    "report",
+    "scan report",
+    "blood test",
+    "test",
+)
+PRESCRIPTION_ADMIN_TERMS = (
+    "prescription",
+    "repeat prescription",
+    "medication",
+    "medicine",
+    "sick note",
+    "letter",
+    "form",
+    "referral letter",
+)
+BILLING_TERMS = (
+    "invoice",
+    "payment",
+    "billing",
+    "receipt",
+    "insurance",
+    "claim",
+    "fee",
+)
+LOGISTICS_TERMS = (
+    "directions",
+    "address",
+    "parking",
+    "where are you",
+    "location",
+    "zoom",
+    "teams link",
+)
+ANXIOUS_TONE_TERMS = (
+    "worried",
+    "anxious",
+    "concerned",
+    "scared",
+    "frustrated",
+    "upset",
+    "urgent",
+    "asap",
+)
+FOLLOW_UP_TERMS = ("follow-up", "follow up", "review", "next steps")
 DIRECT_PATIENT_REQUEST_PATTERN = re.compile(
     r"\b(i|i'm|i’d|i'd|my|me|could|can|would|please|available|prefer|need|want)\b",
     flags=re.IGNORECASE,
@@ -173,6 +258,18 @@ class SlotConstraints(TypedDict):
     daily_start: time | None
     daily_end: time | None
     notes: list[str]
+
+
+class TriageResult(TypedDict):
+    request_type: str
+    urgency_level: str
+    risk_level: str
+    requires_doctor_review: bool
+    suggested_next_action: str
+    patient_emotional_tone: str
+    triage_confidence: Decimal
+    triage_reason: str
+    action_priority: str
 
 
 def _practice_id() -> str:
@@ -740,12 +837,16 @@ def _patient_request_dto(item: ClinicPatientRequestsItem) -> dict[str, Any]:
         "finalMessage": _optional_text(item["final_message"]),
         "intent": item["intent"],
         "patientEmail": _optional_text(item["patient_email"]),
+        "patientEmotionalTone": str(item.get("patient_emotional_tone", "neutral")),
         "patientId": _optional_text(item["patient_id"]),
         "patientName": _optional_text(item["patient_name"]),
         "patientRequestId": item["patient_request_id"],
         "practiceId": item["practice_id"],
         "proposedWindows": item["proposed_windows"],
         "requestConstraints": item["request_constraints"],
+        "requestType": str(item.get("request_type", item["intent"])),
+        "requiresDoctorReview": bool(item.get("requires_doctor_review", False)),
+        "riskLevel": str(item.get("risk_level", "low")),
         "sourceExcerpt": _optional_text(item["source_excerpt"]),
         "sourceMessageId": _optional_text(item["source_message_id"]),
         "sourceProvider": item["source_provider"],
@@ -753,9 +854,12 @@ def _patient_request_dto(item: ClinicPatientRequestsItem) -> dict[str, Any]:
         "sourceSummary": item["source_summary"],
         "sourceThreadId": _optional_text(item["source_thread_id"]),
         "status": item["status"],
+        "suggestedNextAction": str(item.get("suggested_next_action", "Review this request before responding.")),
         "timeLabel": item["time_label"],
         "triageConfidence": float(item["triage_confidence"]),
+        "triageCategory": str(item.get("triage_category", item.get("request_type", item["intent"]))),
         "triageReason": item["triage_reason"],
+        "urgencyLevel": str(item.get("urgency_level", "routine")),
         "updatedAt": item["updated_at"],
     }
 
@@ -1397,12 +1501,15 @@ def _is_clinic_message(
         return True
 
     has_medical_context = _contains_any(combined_text, MEDICAL_PRACTICE_TERMS)
+    has_urgent_clinical_context = _contains_any(combined_text, URGENT_CLINICAL_TERMS)
     has_scheduling_intent = _contains_any(combined_text, SCHEDULING_INTENT_TERMS) or _contains_any(
         combined_text,
         BOOKING_PHRASES,
     )
     has_direct_request = DIRECT_PATIENT_REQUEST_PATTERN.search(combined_text) is not None
 
+    if has_urgent_clinical_context and has_direct_request:
+        return True
     if has_medical_context and (has_scheduling_intent or has_direct_request):
         return True
     if has_scheduling_intent and has_direct_request:
@@ -1419,6 +1526,119 @@ def _infer_gmail_action_type(text: str) -> tuple[str, str]:
     if "referral" in lowered or "consultation" in lowered or "appointment" in lowered or "book" in lowered:
         return "enquiry", "new"
     return "enquiry", "new"
+
+
+def _triage_gmail_request(text: str, *, matched_patient: bool) -> TriageResult:
+    lowered = text.lower()
+    emotional_tone = "anxious_or_frustrated" if _contains_any(lowered, ANXIOUS_TONE_TERMS) else "neutral"
+
+    if _contains_any(lowered, URGENT_CLINICAL_TERMS):
+        return {
+            "request_type": "urgent_clinical_concern",
+            "urgency_level": "urgent",
+            "risk_level": "high",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Review urgently and follow the clinic escalation protocol before any reply is sent.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.88") if matched_patient else _dynamodb_decimal("0.76"),
+            "triage_reason": "Message includes wording associated with potentially urgent OB-GYN symptoms.",
+            "action_priority": "urgent",
+        }
+    if "reschedule" in lowered or "cancel" in lowered or "move" in lowered:
+        return {
+            "request_type": "reschedule_cancellation",
+            "urgency_level": "soon",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "Review the draft and confirm the scheduling next step with the patient.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.86"),
+            "triage_reason": "Message is about changing an existing appointment.",
+            "action_priority": "action",
+        }
+    if _contains_any(lowered, RESULT_QUERY_TERMS):
+        return {
+            "request_type": "test_report_result_query",
+            "urgency_level": "soon",
+            "risk_level": "medium",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Doctor should review the result context before the clinic replies.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.82"),
+            "triage_reason": "Message appears to ask about a test, scan, report, or result.",
+            "action_priority": "clinical",
+        }
+    if _contains_any(lowered, PRESCRIPTION_ADMIN_TERMS):
+        return {
+            "request_type": "prescription_admin_request",
+            "urgency_level": "routine",
+            "risk_level": "medium",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Check the request details and approve the appropriate clinic response.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.80"),
+            "triage_reason": "Message appears to request a prescription, letter, form, or referral document.",
+            "action_priority": "clinical",
+        }
+    if _contains_any(lowered, ROUTINE_CLINICAL_TERMS):
+        return {
+            "request_type": "routine_clinical_question",
+            "urgency_level": "soon",
+            "risk_level": "medium",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Doctor should review the clinical context before any reply is sent.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.78") if matched_patient else _dynamodb_decimal("0.68"),
+            "triage_reason": "Message contains clinical terms but does not match the urgent escalation list.",
+            "action_priority": "clinical",
+        }
+    if _contains_any(lowered, BILLING_TERMS):
+        return {
+            "request_type": "billing_payment",
+            "urgency_level": "routine",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "Review the admin draft or route to billing support.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.84"),
+            "triage_reason": "Message appears to be about billing, payment, insurance, or receipts.",
+            "action_priority": "admin",
+        }
+    if _contains_any(lowered, LOGISTICS_TERMS):
+        return {
+            "request_type": "general_logistics",
+            "urgency_level": "routine",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "Review the logistics draft before any patient reply is created or sent.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.82"),
+            "triage_reason": "Message appears to be about clinic logistics.",
+            "action_priority": "admin",
+        }
+    if _contains_any(lowered, FOLLOW_UP_TERMS):
+        return {
+            "request_type": "follow_up",
+            "urgency_level": "routine",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "Review the follow-up draft and decide the next admin step.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.80"),
+            "triage_reason": "Message appears to ask about follow-up or next steps.",
+            "action_priority": "info",
+        }
+    return {
+        "request_type": "appointment_request",
+        "urgency_level": "routine",
+        "risk_level": "low",
+        "requires_doctor_review": False,
+        "suggested_next_action": "Review proposed availability windows and approve the reply text.",
+        "patient_emotional_tone": emotional_tone,
+        "triage_confidence": _dynamodb_decimal("0.90") if matched_patient else _dynamodb_decimal("0.72"),
+        "triage_reason": "Message matched patient scheduling language in Gmail metadata.",
+        "action_priority": "new",
+    }
 
 
 def _parse_time_value(value: str) -> time | None:
@@ -1800,8 +2020,18 @@ def _draft_reply_for_message(
     appointment_kind: str,
     slot_labels: list[str],
     request_text: str = "",
+    triage: TriageResult | None = None,
 ) -> str:
     first_name = patient_name.split()[0] if patient_name and patient_name != "Unknown sender" else "there"
+    if triage and triage["request_type"] == "urgent_clinical_concern":
+        return (
+            f"Dear {first_name},\n\n"
+            "Thank you for letting us know. I have flagged your message for urgent review by Dr. Shalini and the clinic team.\n\n"
+            "If you feel unwell, symptoms are worsening, or you are worried this cannot wait, please follow the clinic's urgent care guidance or seek urgent medical help now.\n\n"
+            "Warm regards,\n"
+            "Dr. Shalini's Clinic"
+        )
+
     request_focus = _request_focus_phrase(request_text, appointment_kind)
     summary_note = _reply_summary_note(summary)
     if slot_labels:
@@ -1846,13 +2076,25 @@ def _action_priority_for_intent(intent: str) -> str:
     return "new"
 
 
+def _action_priority_for_request(item: ClinicPatientRequestsItem) -> str:
+    if item["urgency_level"] == "urgent" or item["risk_level"] == "high":
+        return "urgent"
+    if item["requires_doctor_review"]:
+        return "clinical"
+    if item["request_type"] in {"reschedule_cancellation"}:
+        return "action"
+    if item["request_type"] in {"billing_payment", "general_logistics"}:
+        return "admin"
+    return _action_priority_for_intent(item["intent"])
+
+
 def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicActionsItem:
     action_kind = REPLY_REVIEW_ACTION_KIND
     return {
         "clinic_id": _clinic_id(),
         "action_id": _request_action_id(item["patient_request_id"], action_kind),
-        "action_type": item["intent"],
-        "priority": _action_priority_for_intent(item["intent"]),
+        "action_type": item["request_type"],
+        "priority": _action_priority_for_request(item),
         "status": item["status"],
         "patient_id": item["patient_id"],
         "patient_name": item["patient_name"],
@@ -1866,7 +2108,17 @@ def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicAc
         "final_message": item["final_message"],
         "metadata": {
             "action_kind": action_kind,
+            "appointment_type": item["appointment_type"],
+            "patient_emotional_tone": item["patient_emotional_tone"],
             "patient_request_id": item["patient_request_id"],
+            "request_type": item["request_type"],
+            "requires_doctor_review": item["requires_doctor_review"],
+            "risk_level": item["risk_level"],
+            "suggested_next_action": item["suggested_next_action"],
+            "triage_category": item["triage_category"],
+            "triage_confidence": str(item["triage_confidence"]),
+            "triage_reason": item["triage_reason"],
+            "urgency_level": item["urgency_level"],
         },
         "source_provider": item["source_provider"],
         "source_thread_id": item["source_thread_id"],
@@ -1903,12 +2155,17 @@ def _gmail_message_to_patient_request_item(
     source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
     request_text = f"{subject} {snippet}"
     intent, _ = _infer_gmail_action_type(request_text)
+    triage = _triage_gmail_request(request_text, matched_patient=matched_patient is not None)
     appointment_kind, duration_minutes = _request_appointment_details(request_text)
     constraints = _slot_constraints_from_text(request_text)
-    slot_labels = _suggest_free_slot_labels(
-        appointment_kind=appointment_kind,
-        duration_minutes=duration_minutes,
-        constraints=constraints,
+    slot_labels = (
+        []
+        if triage["risk_level"] == "high"
+        else _suggest_free_slot_labels(
+            appointment_kind=appointment_kind,
+            duration_minutes=duration_minutes,
+            constraints=constraints,
+        )
     )
     created_at = _gmail_message_datetime(message, headers)
     thread_id = message.get("threadId")
@@ -1920,6 +2177,7 @@ def _gmail_message_to_patient_request_item(
         appointment_kind=appointment_kind,
         slot_labels=slot_labels,
         request_text=request_text,
+        triage=triage,
     )
 
     return {
@@ -1936,10 +2194,17 @@ def _gmail_message_to_patient_request_item(
         "appointment_type": appointment_kind,
         "duration_minutes": duration_minutes,
         "intent": intent,
+        "patient_emotional_tone": triage["patient_emotional_tone"],
         "proposed_windows": slot_labels,
         "request_constraints": _slot_constraints_record(constraints),
-        "triage_confidence": _dynamodb_decimal("0.90") if matched_patient else _dynamodb_decimal("0.72"),
-        "triage_reason": "Matched clinic scheduling language in Gmail metadata.",
+        "request_type": triage["request_type"],
+        "requires_doctor_review": triage["requires_doctor_review"],
+        "risk_level": triage["risk_level"],
+        "suggested_next_action": triage["suggested_next_action"],
+        "triage_category": triage["request_type"],
+        "triage_confidence": _dynamodb_decimal(str(triage["triage_confidence"])),
+        "triage_reason": triage["triage_reason"],
+        "urgency_level": triage["urgency_level"],
         "status": "needs_approval",
         "final_message": "",
         "source_provider": "gmail",

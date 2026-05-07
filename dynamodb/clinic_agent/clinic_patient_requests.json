@@ -20,6 +20,7 @@
     "duration_minutes": "Number",
     "final_message": "String",
     "intent": "String",
+    "patient_emotional_tone": "String",
     "patient_email": "String",
     "patient_id": "String",
     "patient_name": "String",
@@ -27,6 +28,9 @@
     "practice_id": "String",
     "proposed_windows": "List",
     "request_constraints": "Map",
+    "request_type": "String",
+    "requires_doctor_review": "Boolean",
+    "risk_level": "String",
     "source_excerpt": "String",
     "source_message_id": "String",
     "source_provider": "String",
@@ -34,9 +38,12 @@
     "source_summary": "String",
     "source_thread_id": "String",
     "status": "String",
+    "suggested_next_action": "String",
     "time_label": "String",
+    "triage_category": "String",
     "triage_confidence": "Number",
     "triage_reason": "String",
+    "urgency_level": "String",
     "updated_at": "String"
   }
 }

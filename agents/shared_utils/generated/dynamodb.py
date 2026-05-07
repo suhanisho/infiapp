@@ -119,12 +119,16 @@ class ClinicPatientRequestsItem(TypedDict):
     final_message: str
     intent: str
     patient_email: str
+    patient_emotional_tone: str
     patient_id: str
     patient_name: str
     patient_request_id: str
     practice_id: str
     proposed_windows: list[Any]
     request_constraints: dict[str, Any]
+    request_type: str
+    requires_doctor_review: bool
+    risk_level: str
     source_excerpt: str
     source_message_id: str
     source_provider: str
@@ -132,10 +136,13 @@ class ClinicPatientRequestsItem(TypedDict):
     source_summary: str
     source_thread_id: str
     status: str
+    suggested_next_action: str
     time_label: str
+    triage_category: str
     triage_confidence: int | float
     triage_reason: str
     updated_at: str
+    urgency_level: str
 
 
 class ClinicPatientRequestsPage(TypedDict):
@@ -316,12 +323,16 @@ CLINIC_PATIENT_REQUESTS_TABLE: dict[str, Any] = {
         "final_message": "String",
         "intent": "String",
         "patient_email": "String",
+        "patient_emotional_tone": "String",
         "patient_id": "String",
         "patient_name": "String",
         "patient_request_id": "String",
         "practice_id": "String",
         "proposed_windows": "List",
         "request_constraints": "Map",
+        "request_type": "String",
+        "requires_doctor_review": "Boolean",
+        "risk_level": "String",
         "source_excerpt": "String",
         "source_message_id": "String",
         "source_provider": "String",
@@ -329,10 +340,13 @@ CLINIC_PATIENT_REQUESTS_TABLE: dict[str, Any] = {
         "source_summary": "String",
         "source_thread_id": "String",
         "status": "String",
+        "suggested_next_action": "String",
         "time_label": "String",
+        "triage_category": "String",
         "triage_confidence": "Number",
         "triage_reason": "String",
         "updated_at": "String",
+        "urgency_level": "String",
     },
     "partition_key": {
         "name": "practice_id",
