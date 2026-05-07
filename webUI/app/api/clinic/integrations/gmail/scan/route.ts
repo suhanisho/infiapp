@@ -9,7 +9,7 @@ export async function POST() {
   }
 
   try {
-    const response = await callClinicAgentScanGmailInbox({});
+    const response = await callClinicAgentScanGmailInbox({ actorEmail: session.user?.email || "" });
     return NextResponse.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to scan Gmail";

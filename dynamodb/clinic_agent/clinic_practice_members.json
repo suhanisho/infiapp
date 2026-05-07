@@ -1,0 +1,24 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "practice_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "member_email",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "auth_provider": "String",
+    "created_at": "String",
+    "display_name": "String",
+    "last_login_at": "String",
+    "member_email": "String",
+    "member_id": "String",
+    "practice_id": "String",
+    "role": "String",
+    "status": "String",
+    "updated_at": "String"
+  }
+}

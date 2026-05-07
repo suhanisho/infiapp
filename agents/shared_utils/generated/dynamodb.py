@@ -56,8 +56,10 @@ class ClinicActionsItem(TypedDict):
     external_draft_id: str
     external_sent_message_id: str
     final_message: str
+    metadata: dict[str, Any]
     patient_id: str
     patient_name: str
+    patient_request_id: str
     priority: str
     source_message: str
     source_message_id: str
@@ -103,6 +105,46 @@ class ClinicIntegrationsPage(TypedDict):
     next_key: dict[str, Any] | None
 
 
+class ClinicPatientRequestsItem(TypedDict):
+    """Typed representation of a row in the clinic_patient_requests table."""
+
+    appointment_type: str
+    approved_at: str
+    approved_by: str
+    completed_at: str
+    completion_note: str
+    created_at: str
+    draft_message: str
+    duration_minutes: int | float
+    final_message: str
+    intent: str
+    patient_email: str
+    patient_id: str
+    patient_name: str
+    patient_request_id: str
+    practice_id: str
+    proposed_windows: list[Any]
+    request_constraints: dict[str, Any]
+    source_excerpt: str
+    source_message_id: str
+    source_provider: str
+    source_subject: str
+    source_summary: str
+    source_thread_id: str
+    status: str
+    time_label: str
+    triage_confidence: int | float
+    triage_reason: str
+    updated_at: str
+
+
+class ClinicPatientRequestsPage(TypedDict):
+    """Paginated query result for the clinic_patient_requests table."""
+
+    items: list[ClinicPatientRequestsItem]
+    next_key: dict[str, Any] | None
+
+
 class ClinicPatientsItem(TypedDict):
     """Typed representation of a row in the clinic_patients table."""
 
@@ -122,6 +164,28 @@ class ClinicPatientsPage(TypedDict):
     """Paginated query result for the clinic_patients table."""
 
     items: list[ClinicPatientsItem]
+    next_key: dict[str, Any] | None
+
+
+class ClinicPracticeMembersItem(TypedDict):
+    """Typed representation of a row in the clinic_practice_members table."""
+
+    auth_provider: str
+    created_at: str
+    display_name: str
+    last_login_at: str
+    member_email: str
+    member_id: str
+    practice_id: str
+    role: str
+    status: str
+    updated_at: str
+
+
+class ClinicPracticeMembersPage(TypedDict):
+    """Paginated query result for the clinic_practice_members table."""
+
+    items: list[ClinicPracticeMembersItem]
     next_key: dict[str, Any] | None
 
 
@@ -185,8 +249,10 @@ CLINIC_ACTIONS_TABLE: dict[str, Any] = {
         "external_draft_id": "String",
         "external_sent_message_id": "String",
         "final_message": "String",
+        "metadata": "Map",
         "patient_id": "String",
         "patient_name": "String",
+        "patient_request_id": "String",
         "priority": "String",
         "source_message": "String",
         "source_message_id": "String",
@@ -237,6 +303,48 @@ CLINIC_INTEGRATIONS_TABLE: dict[str, Any] = {
     "table_name": "clinic_integrations",
 }
 
+CLINIC_PATIENT_REQUESTS_TABLE: dict[str, Any] = {
+    "attributes": {
+        "appointment_type": "String",
+        "approved_at": "String",
+        "approved_by": "String",
+        "completed_at": "String",
+        "completion_note": "String",
+        "created_at": "String",
+        "draft_message": "String",
+        "duration_minutes": "Number",
+        "final_message": "String",
+        "intent": "String",
+        "patient_email": "String",
+        "patient_id": "String",
+        "patient_name": "String",
+        "patient_request_id": "String",
+        "practice_id": "String",
+        "proposed_windows": "List",
+        "request_constraints": "Map",
+        "source_excerpt": "String",
+        "source_message_id": "String",
+        "source_provider": "String",
+        "source_subject": "String",
+        "source_summary": "String",
+        "source_thread_id": "String",
+        "status": "String",
+        "time_label": "String",
+        "triage_confidence": "Number",
+        "triage_reason": "String",
+        "updated_at": "String",
+    },
+    "partition_key": {
+        "name": "practice_id",
+        "type": "String",
+    },
+    "sort_key": {
+        "name": "patient_request_id",
+        "type": "String",
+    },
+    "table_name": "clinic_patient_requests",
+}
+
 CLINIC_PATIENTS_TABLE: dict[str, Any] = {
     "attributes": {
         "clinic_id": "String",
@@ -259,6 +367,30 @@ CLINIC_PATIENTS_TABLE: dict[str, Any] = {
         "type": "String",
     },
     "table_name": "clinic_patients",
+}
+
+CLINIC_PRACTICE_MEMBERS_TABLE: dict[str, Any] = {
+    "attributes": {
+        "auth_provider": "String",
+        "created_at": "String",
+        "display_name": "String",
+        "last_login_at": "String",
+        "member_email": "String",
+        "member_id": "String",
+        "practice_id": "String",
+        "role": "String",
+        "status": "String",
+        "updated_at": "String",
+    },
+    "partition_key": {
+        "name": "practice_id",
+        "type": "String",
+    },
+    "sort_key": {
+        "name": "member_email",
+        "type": "String",
+    },
+    "table_name": "clinic_practice_members",
 }
 
 CLINIC_SCHEDULE_TABLE: dict[str, Any] = {
@@ -315,7 +447,9 @@ CLINIC_SETTINGS_TABLE: dict[str, Any] = {
 TABLES: dict[str, dict[str, Any]] = {
     "clinic_actions": CLINIC_ACTIONS_TABLE,
     "clinic_integrations": CLINIC_INTEGRATIONS_TABLE,
+    "clinic_patient_requests": CLINIC_PATIENT_REQUESTS_TABLE,
     "clinic_patients": CLINIC_PATIENTS_TABLE,
+    "clinic_practice_members": CLINIC_PRACTICE_MEMBERS_TABLE,
     "clinic_schedule": CLINIC_SCHEDULE_TABLE,
     "clinic_settings": CLINIC_SETTINGS_TABLE,
 }
@@ -597,6 +731,144 @@ def query_clinic_integrations(
 
 
 
+def put_clinic_patient_requests(
+    item: ClinicPatientRequestsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
+
+
+def get_clinic_patient_requests(
+    practice_id: Any,
+    patient_request_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicPatientRequestsItem | None:
+    response = _table(
+        CLINIC_PATIENT_REQUESTS_TABLE,
+        dynamodb_resource,
+    ).get_item(
+        Key=_build_key(
+            CLINIC_PATIENT_REQUESTS_TABLE,
+            practice_id,
+            patient_request_id,
+        )
+    )
+    item = response.get("Item")
+    return cast(ClinicPatientRequestsItem, item) if isinstance(item, dict) else None
+
+
+def query_clinic_patient_requests_item(
+    practice_id: Any,
+    patient_request_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicPatientRequestsItem | None:
+    return get_clinic_patient_requests(
+        practice_id,
+        patient_request_id,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+
+def delete_clinic_patient_requests(
+    practice_id: Any,
+    patient_request_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                CLINIC_PATIENT_REQUESTS_TABLE,
+                practice_id,
+                patient_request_id,
+            )
+        ),
+    )
+
+
+def query_clinic_patient_requests_by_patient_request_id_range_page(
+    practice_id: Any,
+    *,
+    start_patient_request_id: Any | None = None,
+    end_patient_request_id: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> ClinicPatientRequestsPage:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("practice_id").eq(practice_id)
+    if start_patient_request_id is not None and end_patient_request_id is not None:
+        key_condition = key_condition & Key("patient_request_id").between(start_patient_request_id, end_patient_request_id)
+    elif start_patient_request_id is not None:
+        key_condition = key_condition & Key("patient_request_id").gte(start_patient_request_id)
+    elif end_patient_request_id is not None:
+        key_condition = key_condition & Key("patient_request_id").lte(end_patient_request_id)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).query(**query_args)
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(ClinicPatientRequestsItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_clinic_patient_requests_by_patient_request_id_range(
+    practice_id: Any,
+    *,
+    start_patient_request_id: Any | None = None,
+    end_patient_request_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicPatientRequestsItem]:
+    return query_clinic_patient_requests_by_patient_request_id_range_page(
+        practice_id,
+        start_patient_request_id=start_patient_request_id,
+        end_patient_request_id=end_patient_request_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
+
+
+def query_clinic_patient_requests(
+    practice_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicPatientRequestsItem]:
+    return query_clinic_patient_requests_by_patient_request_id_range(
+        practice_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )
+
+
+
 def put_clinic_patients(
     item: ClinicPatientsItem,
     *,
@@ -727,6 +999,144 @@ def query_clinic_patients(
 ) -> list[ClinicPatientsItem]:
     return query_clinic_patients_by_patient_id_range(
         clinic_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )
+
+
+
+def put_clinic_practice_members(
+    item: ClinicPracticeMembersItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
+
+
+def get_clinic_practice_members(
+    practice_id: Any,
+    member_email: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicPracticeMembersItem | None:
+    response = _table(
+        CLINIC_PRACTICE_MEMBERS_TABLE,
+        dynamodb_resource,
+    ).get_item(
+        Key=_build_key(
+            CLINIC_PRACTICE_MEMBERS_TABLE,
+            practice_id,
+            member_email,
+        )
+    )
+    item = response.get("Item")
+    return cast(ClinicPracticeMembersItem, item) if isinstance(item, dict) else None
+
+
+def query_clinic_practice_members_item(
+    practice_id: Any,
+    member_email: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicPracticeMembersItem | None:
+    return get_clinic_practice_members(
+        practice_id,
+        member_email,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+
+def delete_clinic_practice_members(
+    practice_id: Any,
+    member_email: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                CLINIC_PRACTICE_MEMBERS_TABLE,
+                practice_id,
+                member_email,
+            )
+        ),
+    )
+
+
+def query_clinic_practice_members_by_member_email_range_page(
+    practice_id: Any,
+    *,
+    start_member_email: Any | None = None,
+    end_member_email: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> ClinicPracticeMembersPage:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("practice_id").eq(practice_id)
+    if start_member_email is not None and end_member_email is not None:
+        key_condition = key_condition & Key("member_email").between(start_member_email, end_member_email)
+    elif start_member_email is not None:
+        key_condition = key_condition & Key("member_email").gte(start_member_email)
+    elif end_member_email is not None:
+        key_condition = key_condition & Key("member_email").lte(end_member_email)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).query(**query_args)
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(ClinicPracticeMembersItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_clinic_practice_members_by_member_email_range(
+    practice_id: Any,
+    *,
+    start_member_email: Any | None = None,
+    end_member_email: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicPracticeMembersItem]:
+    return query_clinic_practice_members_by_member_email_range_page(
+        practice_id,
+        start_member_email=start_member_email,
+        end_member_email=end_member_email,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
+
+
+def query_clinic_practice_members(
+    practice_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicPracticeMembersItem]:
+    return query_clinic_practice_members_by_member_email_range(
+        practice_id,
         dynamodb_resource=dynamodb_resource,
         scan_index_forward=scan_index_forward,
         consistent_read=consistent_read,

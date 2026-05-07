@@ -1,39 +1,42 @@
 {
   "primary_key": {
     "partition_key": {
-      "name": "clinic_id",
+      "name": "practice_id",
       "type": "String"
     },
     "sort_key": {
-      "name": "action_id",
+      "name": "patient_request_id",
       "type": "String"
     }
   },
   "attributes": {
-    "action_id": "String",
-    "action_type": "String",
+    "appointment_type": "String",
     "approved_at": "String",
     "approved_by": "String",
-    "clinic_id": "String",
     "completed_at": "String",
     "completion_note": "String",
     "created_at": "String",
     "draft_message": "String",
-    "external_draft_id": "String",
-    "external_sent_message_id": "String",
+    "duration_minutes": "Number",
     "final_message": "String",
-    "metadata": "Map",
+    "intent": "String",
+    "patient_email": "String",
     "patient_id": "String",
     "patient_name": "String",
     "patient_request_id": "String",
-    "priority": "String",
-    "source_message": "String",
+    "practice_id": "String",
+    "proposed_windows": "List",
+    "request_constraints": "Map",
+    "source_excerpt": "String",
     "source_message_id": "String",
     "source_provider": "String",
+    "source_subject": "String",
     "source_summary": "String",
     "source_thread_id": "String",
     "status": "String",
     "time_label": "String",
+    "triage_confidence": "Number",
+    "triage_reason": "String",
     "updated_at": "String"
   }
 }

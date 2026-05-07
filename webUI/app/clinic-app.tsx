@@ -123,10 +123,10 @@ function ActionQueue({
         <p className="date-line">Saturday 2 May, 1:42 PM</p>
         <h1 id="actions-title">
           {loading && actions.length === 0
-            ? "Loading actions"
+            ? "Loading requests"
             : pendingCount > 0
               ? `${pendingCount} items need review`
-              : "All actions completed"}
+              : "All requests completed"}
         </h1>
       </div>
 
@@ -138,7 +138,7 @@ function ActionQueue({
         </p>
       </div>
 
-      {loading ? <div className="empty-state">Loading clinic actions...</div> : null}
+      {loading ? <div className="empty-state">Loading patient requests...</div> : null}
 
       <div className="stack-list">
         {actions.map((action) => {
@@ -573,7 +573,7 @@ export function ClinicApp({
     }
 
     if (googleOAuthStatus === "connected") {
-      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific action.");
+      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
       setIntegrations((current) => connectedIntegrationState(current));
     } else {
       setError(params.get("reason") || "Google connection did not complete.");
@@ -660,14 +660,14 @@ export function ClinicApp({
     }
     if (mockAuthAvailable) {
       setIntegrations((current) => connectedIntegrationState(current));
-      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific action.");
+      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
       return;
     }
     setError("Google OAuth is not configured yet.");
   }
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "actions", label: "Actions" },
+    { key: "actions", label: "Requests" },
     { key: "schedule", label: "Schedule" },
     { key: "patients", label: "Patients" },
   ];

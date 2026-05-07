@@ -8,9 +8,9 @@ read-first and approval-gated.
 
 - Calendar writes are disabled until we explicitly add a user-approved write
   workflow.
-- Gmail scans can create or refresh in-app action records and draft text, but
-  they must not send email, label threads, archive messages, or create Gmail
-  drafts automatically.
+- Gmail scans can create or refresh patient request records, linked in-app
+  action records, and draft text, but they must not send email, label threads,
+  archive messages, or create Gmail drafts automatically.
 - Gmail draft creation and Gmail sending are separate future actions. Each must
   require an explicit approval event and preserve an audit trail.
 - OAuth refresh tokens must not be stored in DynamoDB. Store token material in a
@@ -23,8 +23,16 @@ read-first and approval-gated.
   sync cursors.
 - `clinic_schedule` stores a local cache of Google Calendar events, including
   external calendar/event IDs.
-- `clinic_actions` stores Gmail-derived action records, draft text, approval
-  state, and Gmail thread/message/draft IDs.
+- `clinic_patient_requests` is the main durable entity for Gmail-derived
+  patient requests. It is keyed by `practice_id + patient_request_id`.
+- `clinic_actions` stores child approval/audit records linked by
+  `patient_request_id`; action IDs are separate so one request can support
+  multiple future actions.
+- `clinic_practice_members` stores app login members for a practice. Patients
+  remain separate and are identified by `patient_id`.
+- The Next.js server passes the signed-in email as `actorEmail` with a
+  short-lived HMAC signature. The Lambda verifies the signature before deriving
+  `practice_id`, so the browser never chooses the practice boundary.
 - `list_integrations` reports connection status and safety modes.
 - Auth.js owns Google sign-in, OAuth state handling, and authorization-code
   exchange in the Next.js server.
@@ -33,11 +41,12 @@ read-first and approval-gated.
 - `sync_google_calendar` refreshes the OAuth token, reads Google Calendar
   events for the next sync window, and refreshes the local schedule cache.
 - `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail metadata and
-  snippets matching clinic keywords, and prepares in-app action drafts. For
-  scheduling requests such as meet-and-greet or initial consultation messages,
-  draft replies include availability windows from the local Google Calendar
-  cache, filtered by patient preferences in the email such as weekdays, next
-  week, morning/afternoon, or after/before time constraints.
+  snippets matching clinic keywords, and upserts patient requests plus in-app
+  action drafts. It does not delete durable open requests that are absent from a
+  later scan. For scheduling requests such as meet-and-greet or initial
+  consultation messages, draft replies include availability windows from the
+  local Google Calendar cache, filtered by patient preferences in the email such
+  as weekdays, next week, morning/afternoon, or after/before time constraints.
 - Unknown senders are filtered conservatively. Automated, newsletter, and
   marketing-style messages are ignored unless they look like direct clinic or
   patient scheduling messages.

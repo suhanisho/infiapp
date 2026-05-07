@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App Handoff
 
-Last updated: 2026-05-06
+Last updated: 2026-05-07
 
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
@@ -9,7 +9,7 @@ continue work on the Dr. Shalini clinic app.
 
 Build a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
 source of truth for appointments. Gmail is the source of patient communication.
-The app reads both, prepares clinic actions and draft replies, and keeps the
+The app reads both, prepares patient requests and draft replies, and keeps the
 doctor in control of any completed action.
 
 ## Current branch and deployment
@@ -33,6 +33,13 @@ This is the most important product rule:
 - Current MVP approvals only store completion/audit state in the backend. They
   do not perform external side effects.
 - Completed actions are stored in `clinic_actions` for future validation/audit.
+- The durable product entity is now `patient_request_id` under a per-login
+  `practice_id`; `clinic_actions` stores child workflow/audit actions that link
+  back to a patient request. This allows one request to have multiple future
+  actions such as reply review, Gmail draft creation, sending, booking, or
+  document follow-up.
+- Patients are identified by `patient_id`. People who log into the app are
+  practice members; patients remain separate patient records.
 - Google OAuth refresh/access token material is stored in AWS Secrets Manager,
   not in DynamoDB or Auth.js tables.
 
@@ -42,7 +49,14 @@ This is the most important product rule:
 - Google sign-in and Google Workspace connection use the same Google OAuth app,
   but the OAuth app is not "per user"; any allowed account signs in through the
   same client ID/secret.
-- Allowed sign-in emails are controlled by `CLINIC_ALLOWED_EMAILS`.
+- Allowed sign-in emails are controlled by `CLINIC_ALLOWED_EMAILS`, unless
+  `CLINIC_ALLOW_SELF_ONBOARDING=true` is set for controlled self-onboarding.
+- The Next.js server passes the signed-in email to the Lambda as `actorEmail`
+  with a short-lived HMAC signature. The Lambda verifies that assertion before
+  deriving a deterministic `practice_id` from the email. The browser does not
+  choose the practice boundary.
+- Practice members are recorded in `clinic_practice_members` when Google is
+  connected.
 - Auth.js uses JWT sessions. There is no Auth.js database adapter because we do
   not want Google token material stored in normal auth tables.
 - The Auth.js sign-in callback calls `connect_google_workspace`, which stores
@@ -68,6 +82,8 @@ Shared Google client:
 DynamoDB specs:
 
 - `dynamodb/clinic_agent/clinic_actions.json`
+- `dynamodb/clinic_agent/clinic_patient_requests.json`
+- `dynamodb/clinic_agent/clinic_practice_members.json`
 - `dynamodb/clinic_agent/clinic_schedule.json`
 - `dynamodb/clinic_agent/clinic_integrations.json`
 - `dynamodb/clinic_agent/clinic_patients.json`
@@ -100,14 +116,20 @@ Gmail:
   terms.
 - It filters out obvious non-patient messages, including newsletters, no-reply
   senders, promos, password resets, and marketing-style emails.
-- It prepares in-app action records in `clinic_actions`.
+- It stores the main request in `clinic_patient_requests` using
+  `practice_id + patient_request_id`.
+- It upserts linked in-app action records in `clinic_actions` so the current
+  Requests UI and approval/audit flow continue to work. Scans do not delete
+  durable open patient requests that fall out of the current Gmail result set.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
 Approval:
 
-- User expands an action, edits the draft text, then clicks `Approve and store`.
+- User expands a request/action card, edits the draft text, then clicks
+  `Approve and store`.
 - `approve_action` marks the action completed and stores final text/audit
-  metadata.
+  metadata. If the action links to a `patient_request_id`, the patient request
+  is marked completed with the same final text and approval metadata.
 - It does not send the final text anywhere.
 
 ## Scheduling design decisions
@@ -146,10 +168,10 @@ Important UI decisions:
   - `Reconnect Google`
   - `Read Calendar`
   - `Scan Gmail`
-- Action cards expand to show source email and editable draft reply.
+- Request cards expand to show source email and editable draft reply.
 - Draft reply text is editable before `Approve and store`.
 - The bottom nav has:
-  - `Actions`
+  - `Requests`
   - `Schedule`
   - `Patients`
 
@@ -165,12 +187,18 @@ GitHub Actions secrets currently expected:
 - `GOOGLE_OAUTH_CLIENT_ID`
 - `GOOGLE_OAUTH_CLIENT_SECRET`
 - `NEXTAUTH_SECRET`
+- Optional: `CLINIC_AGENT_INTERNAL_SECRET`; if omitted, the app uses
+  `NEXTAUTH_SECRET` for the internal signed actor assertion.
 
 GitHub Actions variables currently expected:
 
 - `NEXTAUTH_URL=https://shalini-clinic-webui.vercel.app`
 - `CLINIC_ALLOWED_EMAILS=...`
-- Optional: `GOOGLE_TOKEN_SECRET_PREFIX`
+- Optional: `CLINIC_ALLOW_SELF_ONBOARDING=true`
+- Optional: `CLINIC_DEMO_SEED_DATA=true` to show demo patients/actions for a
+  practice. New real practice IDs do not receive demo patient data by default.
+- Optional: `GOOGLE_TOKEN_SECRET_PREFIX` as a root prefix; the Lambda appends
+  `practice_id/clinic_agent/google`.
 
 The deploy script syncs relevant env vars to Vercel and Lambda.
 
@@ -198,17 +226,19 @@ before commits to avoid unrelated churn.
 - `7fe0a1a` - Suggest calendar slots in Gmail drafts
 - `1c8b06c` - Respect patient preferences in slot suggestions
 - `082e4af` - Offer availability windows and filter inbox noise
+- Current working changes after that add `practice_id` scoping,
+  `clinic_patient_requests` as the main request entity, child action IDs,
+  signed actor assertions, and practice member records.
 
 ## Suggested next steps
 
 1. Improve email triage with a real LLM/classifier step so the app can better
    distinguish patient messages from unrelated inbox noise.
-2. Add patient matching/review for unknown senders before creating durable
-   patient-linked actions.
+2. Add patient matching/review for unknown senders before completing durable
+   patient-linked requests.
 3. Add a preview/audit panel showing why an email was included or ignored.
 4. Consider a configurable Google Calendar appointment schedule booking link.
 5. Later, add explicit approval-gated actions for:
    - creating a Gmail draft
    - sending a Gmail draft
    - holding or booking a calendar slot
-

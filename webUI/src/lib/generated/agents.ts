@@ -2,8 +2,9 @@
 
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
+import crypto from "node:crypto";
 
-import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
+import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientRequestsInput, type ClinicAgentListPatientRequestsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
 
 type AgentBackendMode = "mock" | "aws_oidc";
 
@@ -73,12 +74,49 @@ function parseLambdaPayload<T>(functionName: string, payloadText: string): T {
   return envelope as T;
 }
 
+function internalAgentSecret(): string {
+  const secret = process.env.CLINIC_AGENT_INTERNAL_SECRET || process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (!secret) {
+    throw new Error("CLINIC_AGENT_INTERNAL_SECRET or NEXTAUTH_SECRET is required for trusted agent calls.");
+  }
+  return secret;
+}
+
+function actorEmailFromPayload(payload: Record<string, unknown>): string {
+  const value = typeof payload.actorEmail === "string" && payload.actorEmail.trim()
+    ? payload.actorEmail
+    : typeof payload.accountEmail === "string"
+      ? payload.accountEmail
+      : "";
+  return value.trim().toLowerCase();
+}
+
+function withTrustedActorAssertion(payload: object): object {
+  const payloadRecord = payload as Record<string, unknown>;
+  const actorEmail = actorEmailFromPayload(payloadRecord);
+  if (!actorEmail) {
+    return payload;
+  }
+  const actorIssuedAt = Math.floor(Date.now() / 1000).toString();
+  const actorSignature = crypto
+    .createHmac("sha256", internalAgentSecret())
+    .update(`${actorEmail}:${actorIssuedAt}`)
+    .digest("hex");
+  return {
+    ...payloadRecord,
+    actorEmail,
+    actorIssuedAt,
+    actorSignature,
+  };
+}
+
 async function invokeLambda<T>(functionName: string, payload: object): Promise<T> {
+  const trustedPayload = withTrustedActorAssertion({ ...payload, source: "webUI" });
   const response = await getLambdaClient().send(
     new InvokeCommand({
       FunctionName: functionName,
       InvocationType: "RequestResponse",
-      Payload: new TextEncoder().encode(JSON.stringify({ ...payload, source: "webUI" })),
+      Payload: new TextEncoder().encode(JSON.stringify(trustedPayload)),
     }),
   );
 
@@ -116,6 +154,14 @@ export async function callClinicAgentListIntegrations(input: ClinicAgentListInte
     return mockCallClinicAgent(payload) as Promise<ClinicAgentListIntegrationsOutput>;
   }
   return invokeLambda<ClinicAgentListIntegrationsOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentListPatientRequests(input: ClinicAgentListPatientRequestsInput): Promise<ClinicAgentListPatientRequestsOutput> {
+  const payload: { action: "list_patient_requests" } & ClinicAgentListPatientRequestsInput = { action: "list_patient_requests", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentListPatientRequestsOutput>;
+  }
+  return invokeLambda<ClinicAgentListPatientRequestsOutput>("clinic_agent", payload);
 }
 
 export async function callClinicAgentListPatients(input: ClinicAgentListPatientsInput): Promise<ClinicAgentListPatientsOutput> {

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import html
 import json
 import os
 import re
+from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any, TypedDict, cast
@@ -20,20 +22,25 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from generated.dynamodb import (
     ClinicActionsItem,
     ClinicIntegrationsItem,
+    ClinicPatientRequestsItem,
     ClinicPatientsItem,
+    ClinicPracticeMembersItem,
     ClinicScheduleItem,
     ClinicSettingsItem,
-    delete_clinic_actions,
     delete_clinic_schedule,
     get_clinic_actions,
     get_clinic_integrations,
+    get_clinic_patient_requests,
     put_clinic_actions,
     put_clinic_integrations,
+    put_clinic_patient_requests,
     put_clinic_patients,
+    put_clinic_practice_members,
     put_clinic_schedule,
     put_clinic_settings,
     query_clinic_actions,
     query_clinic_integrations,
+    query_clinic_patient_requests,
     query_clinic_patients,
     query_clinic_schedule,
     query_clinic_settings,
@@ -41,7 +48,9 @@ from generated.dynamodb import (
 from google_workspace import GoogleWorkspaceError, GoogleWorkspaceHttpClient, refresh_google_access_token, required_google_scopes
 from response import json_response
 
-CLINIC_ID = "shalini-clinic"
+LEGACY_CLINIC_ID = "shalini-clinic"
+CLINIC_ID = LEGACY_CLINIC_ID
+_CURRENT_PRACTICE_ID: ContextVar[str] = ContextVar("clinic_agent_practice_id", default=LEGACY_CLINIC_ID)
 SEED_UPDATED_AT = "2026-05-02T00:00:00+00:00"
 COMPLETION_NOTE = "Doctor approved and stored this action. No external email or calendar action was taken by the MVP."
 DEFAULT_CLINIC_TIMEZONE = "Europe/London"
@@ -55,6 +64,9 @@ DEFAULT_SLOT_SUGGESTIONS = 3
 SLOT_SEARCH_DAYS = 14
 SLOT_STEP_MINUTES = 30
 MIN_BOOKING_NOTICE_HOURS = 2
+ACTOR_ASSERTION_TTL_SECONDS = 300
+REPLY_REVIEW_ACTION_KIND = "review_reply"
+COMPLETED_STATUSES = {"completed"}
 WEEKDAY_ALIASES = {
     0: ("monday", "mondays", "mon"),
     1: ("tuesday", "tuesdays", "tue", "tues"),
@@ -161,6 +173,96 @@ class SlotConstraints(TypedDict):
     daily_end: time | None
     notes: list[str]
 
+
+def _practice_id() -> str:
+    return _CURRENT_PRACTICE_ID.get()
+
+
+def _clinic_id() -> str:
+    return _practice_id()
+
+
+def _actor_email_from_payload(payload: dict[str, Any]) -> str:
+    for key in ("actorEmail", "accountEmail"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def _internal_agent_secret() -> str:
+    return (
+        os.environ.get("CLINIC_AGENT_INTERNAL_SECRET", "").strip()
+        or os.environ.get("NEXTAUTH_SECRET", "").strip()
+        or os.environ.get("AUTH_SECRET", "").strip()
+    )
+
+
+def _signed_actor_message(actor_email: str, issued_at: str) -> str:
+    return f"{actor_email}:{issued_at}"
+
+
+def _verify_actor_assertion(payload: dict[str, Any]) -> str:
+    actor_email = _actor_email_from_payload(payload)
+    if not actor_email:
+        return ""
+
+    secret = _internal_agent_secret()
+    if not secret:
+        raise RuntimeError("Trusted actor assertion secret is not configured.")
+
+    issued_at = str(payload.get("actorIssuedAt", "")).strip()
+    signature = str(payload.get("actorSignature", "")).strip()
+    if not issued_at or not signature:
+        raise RuntimeError("Trusted actor assertion is required.")
+
+    try:
+        issued_at_seconds = int(issued_at)
+    except ValueError as exc:
+        raise RuntimeError("Trusted actor assertion timestamp is invalid.") from exc
+
+    now_seconds = int(datetime.now(timezone.utc).timestamp())
+    if abs(now_seconds - issued_at_seconds) > ACTOR_ASSERTION_TTL_SECONDS:
+        raise RuntimeError("Trusted actor assertion has expired.")
+
+    expected_signature = hmac.new(
+        secret.encode("utf-8"),
+        _signed_actor_message(actor_email, issued_at).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        raise RuntimeError("Trusted actor assertion signature is invalid.")
+    return actor_email
+
+
+def _practice_id_for_actor(actor_email: str) -> str:
+    normalized = actor_email.strip().lower()
+    if not normalized:
+        return LEGACY_CLINIC_ID
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+    return f"practice_{digest}"
+
+
+def _with_current_practice(item: Any) -> dict[str, Any]:
+    return {**item, "clinic_id": _clinic_id()}
+
+
+def _demo_seed_enabled() -> bool:
+    configured = os.environ.get("CLINIC_DEMO_SEED_DATA", "").strip().lower()
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    return _practice_id() == LEGACY_CLINIC_ID
+
+
+def _practice_member_id(actor_email: str) -> str:
+    return f"member_{hashlib.sha256(actor_email.strip().lower().encode('utf-8')).hexdigest()[:20]}"
+
+
+def _request_action_id(patient_request_id: str, action_kind: str) -> str:
+    return f"{patient_request_id}#action#{_safe_external_fragment(action_kind)}"
+
 SEED_ACTIONS: list[ClinicActionsItem] = [
     {
         "clinic_id": CLINIC_ID,
@@ -170,6 +272,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "status": "needs_approval",
         "patient_id": "p10",
         "patient_name": "Rachel Davies",
+        "patient_request_id": "seed-request-rachel-davies",
         "time_label": "9:41 AM",
         "source_summary": "New patient referred by GP, wants initial consultation",
         "source_message": "Hi, I was referred by Dr. Patel at the Angel Medical Centre. I'd like to book an initial consultation at your earliest convenience. I'm flexible on days but prefer afternoons if possible. Thank you, Rachel",
@@ -177,6 +280,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "external_draft_id": "",
         "external_sent_message_id": "",
         "final_message": "",
+        "metadata": {},
         "source_provider": "gmail",
         "source_thread_id": "gmail-thread-rachel-davies",
         "source_message_id": "gmail-message-rachel-davies",
@@ -195,6 +299,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "status": "needs_approval",
         "patient_id": "p8",
         "patient_name": "Fatima Ali",
+        "patient_request_id": "seed-request-fatima-ali",
         "time_label": "8:15 AM",
         "source_summary": "Wants to move Friday appointment to next week",
         "source_message": "Hi, I'm afraid something has come up and I won't be able to make my Friday appointment. Could we reschedule to sometime next week? Monday or Tuesday would be ideal. Thanks, Fatima",
@@ -202,6 +307,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "external_draft_id": "",
         "external_sent_message_id": "",
         "final_message": "",
+        "metadata": {},
         "source_provider": "gmail",
         "source_thread_id": "gmail-thread-fatima-ali",
         "source_message_id": "gmail-message-fatima-ali",
@@ -220,6 +326,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "status": "proposed",
         "patient_id": "",
         "patient_name": "",
+        "patient_request_id": "seed-request-nhs-clinic",
         "time_label": "7:30 AM",
         "source_summary": "NHS clinic confirmed for Wednesday",
         "source_message": "Wednesday 30 Apr, 8:30 AM - 1:00 PM\nSt Mary's Hospital, Praed Street\n4 patients scheduled",
@@ -227,6 +334,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "external_draft_id": "",
         "external_sent_message_id": "",
         "final_message": "",
+        "metadata": {},
         "source_provider": "google_calendar",
         "source_thread_id": "",
         "source_message_id": "",
@@ -245,6 +353,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "status": "needs_approval",
         "patient_id": "p9",
         "patient_name": "Priya Sharma",
+        "patient_request_id": "seed-request-priya-sharma",
         "time_label": "Auto",
         "source_summary": "Follow-up due - last seen 4 weeks ago",
         "source_message": "",
@@ -252,6 +361,7 @@ SEED_ACTIONS: list[ClinicActionsItem] = [
         "external_draft_id": "",
         "external_sent_message_id": "",
         "final_message": "",
+        "metadata": {},
         "source_provider": "gmail",
         "source_thread_id": "gmail-thread-priya-sharma",
         "source_message_id": "",
@@ -594,9 +704,12 @@ def _action_dto(item: ClinicActionsItem) -> dict[str, Any]:
         "externalDraftId": _optional_text(item["external_draft_id"]),
         "externalSentMessageId": _optional_text(item["external_sent_message_id"]),
         "finalMessage": _optional_text(item["final_message"]),
+        "metadata": item.get("metadata", {}),
         "patientId": _optional_text(item["patient_id"]),
         "patientName": _optional_text(item["patient_name"]),
+        "patientRequestId": _optional_text(item.get("patient_request_id", "")),
         "priority": item["priority"],
+        "practiceId": item["clinic_id"],
         "sourceMessage": _optional_text(item["source_message"]),
         "sourceMessageId": _optional_text(item["source_message_id"]),
         "sourceProvider": item["source_provider"],
@@ -604,6 +717,39 @@ def _action_dto(item: ClinicActionsItem) -> dict[str, Any]:
         "sourceThreadId": _optional_text(item["source_thread_id"]),
         "status": item["status"],
         "timeLabel": item["time_label"],
+        "updatedAt": item["updated_at"],
+    }
+
+
+def _patient_request_dto(item: ClinicPatientRequestsItem) -> dict[str, Any]:
+    return {
+        "appointmentType": item["appointment_type"],
+        "approvedAt": _optional_text(item["approved_at"]),
+        "approvedBy": _optional_text(item["approved_by"]),
+        "completedAt": _optional_text(item["completed_at"]),
+        "completionNote": _optional_text(item["completion_note"]),
+        "createdAt": item["created_at"],
+        "draftMessage": _optional_text(item["draft_message"]),
+        "durationMinutes": item["duration_minutes"],
+        "finalMessage": _optional_text(item["final_message"]),
+        "intent": item["intent"],
+        "patientEmail": _optional_text(item["patient_email"]),
+        "patientId": _optional_text(item["patient_id"]),
+        "patientName": _optional_text(item["patient_name"]),
+        "patientRequestId": item["patient_request_id"],
+        "practiceId": item["practice_id"],
+        "proposedWindows": item["proposed_windows"],
+        "requestConstraints": item["request_constraints"],
+        "sourceExcerpt": _optional_text(item["source_excerpt"]),
+        "sourceMessageId": _optional_text(item["source_message_id"]),
+        "sourceProvider": item["source_provider"],
+        "sourceSubject": _optional_text(item["source_subject"]),
+        "sourceSummary": item["source_summary"],
+        "sourceThreadId": _optional_text(item["source_thread_id"]),
+        "status": item["status"],
+        "timeLabel": item["time_label"],
+        "triageConfidence": item["triage_confidence"],
+        "triageReason": item["triage_reason"],
         "updatedAt": item["updated_at"],
     }
 
@@ -655,65 +801,82 @@ def _integration_dto(item: ClinicIntegrationsItem) -> dict[str, Any]:
 
 
 def _list_action_items() -> list[ClinicActionsItem]:
-    items = query_clinic_actions(CLINIC_ID, scan_index_forward=True, consistent_read=True)
+    items = query_clinic_actions(_clinic_id(), scan_index_forward=True, consistent_read=True)
     if items:
         return items
-    gmail_integration = get_clinic_integrations(CLINIC_ID, "gmail")
+    gmail_integration = get_clinic_integrations(_clinic_id(), "gmail")
     if gmail_integration and gmail_integration["last_sync_at"]:
         return []
+    if not _demo_seed_enabled():
+        return []
     for item in SEED_ACTIONS:
-        put_clinic_actions(item)
-    return list(SEED_ACTIONS)
+        put_clinic_actions(cast(ClinicActionsItem, _with_current_practice(item)))
+    return [cast(ClinicActionsItem, _with_current_practice(item)) for item in SEED_ACTIONS]
+
+
+def _list_patient_request_items() -> list[ClinicPatientRequestsItem]:
+    return query_clinic_patient_requests(_practice_id(), scan_index_forward=True, consistent_read=True)
 
 
 def _list_patient_items() -> list[ClinicPatientsItem]:
-    items = query_clinic_patients(CLINIC_ID, scan_index_forward=True, consistent_read=True)
+    items = query_clinic_patients(_clinic_id(), scan_index_forward=True, consistent_read=True)
     if items:
         return items
+    if not _demo_seed_enabled():
+        return []
     for item in SEED_PATIENTS:
-        put_clinic_patients(item)
-    return list(SEED_PATIENTS)
+        put_clinic_patients(cast(ClinicPatientsItem, _with_current_practice(item)))
+    return [cast(ClinicPatientsItem, _with_current_practice(item)) for item in SEED_PATIENTS]
 
 
 def _list_schedule_items() -> list[ClinicScheduleItem]:
-    items = query_clinic_schedule(CLINIC_ID, scan_index_forward=True, consistent_read=True)
+    items = query_clinic_schedule(_clinic_id(), scan_index_forward=True, consistent_read=True)
     if items:
         return items
-    calendar_integration = get_clinic_integrations(CLINIC_ID, "google_calendar")
+    calendar_integration = get_clinic_integrations(_clinic_id(), "google_calendar")
     if calendar_integration and calendar_integration["last_sync_at"]:
         return []
+    if not _demo_seed_enabled():
+        return []
     for item in SEED_SCHEDULE:
-        put_clinic_schedule(item)
-    return list(SEED_SCHEDULE)
+        put_clinic_schedule(cast(ClinicScheduleItem, _with_current_practice(item)))
+    return [cast(ClinicScheduleItem, _with_current_practice(item)) for item in SEED_SCHEDULE]
 
 
 def _list_setting_items() -> list[ClinicSettingsItem]:
-    items = query_clinic_settings(CLINIC_ID, scan_index_forward=True, consistent_read=True)
+    items = query_clinic_settings(_clinic_id(), scan_index_forward=True, consistent_read=True)
     if items:
         return items
     for item in SEED_SETTINGS:
-        put_clinic_settings(item)
-    return list(SEED_SETTINGS)
+        put_clinic_settings(cast(ClinicSettingsItem, _with_current_practice(item)))
+    return [cast(ClinicSettingsItem, _with_current_practice(item)) for item in SEED_SETTINGS]
 
 
 def _list_integration_items() -> list[ClinicIntegrationsItem]:
-    items = query_clinic_integrations(CLINIC_ID, scan_index_forward=True, consistent_read=True)
+    items = query_clinic_integrations(_clinic_id(), scan_index_forward=True, consistent_read=True)
     if items:
         return items
     for item in SEED_INTEGRATIONS:
-        put_clinic_integrations(item)
-    return list(SEED_INTEGRATIONS)
+        put_clinic_integrations(cast(ClinicIntegrationsItem, _with_current_practice(item)))
+    return [cast(ClinicIntegrationsItem, _with_current_practice(item)) for item in SEED_INTEGRATIONS]
 
 
 def _list_actions(include_completed: bool) -> dict[str, Any]:
     items = sorted(_list_action_items(), key=lambda item: item["created_at"], reverse=True)
     if not include_completed:
         items = [item for item in items if item["status"] != "completed"]
-    return {"actions": [_action_dto(item) for item in items]}
+    return {"actions": [_action_dto(item) for item in items], "practiceId": _practice_id()}
+
+
+def _list_patient_requests(include_completed: bool) -> dict[str, Any]:
+    items = sorted(_list_patient_request_items(), key=lambda item: item["created_at"], reverse=True)
+    if not include_completed:
+        items = [item for item in items if item["status"] != "completed"]
+    return {"patientRequests": [_patient_request_dto(item) for item in items], "practiceId": _practice_id()}
 
 
 def _find_action(action_id: str) -> ClinicActionsItem | None:
-    item = get_clinic_actions(CLINIC_ID, action_id)
+    item = get_clinic_actions(_clinic_id(), action_id)
     if item is not None:
         return item
     for seed_item in _list_action_items():
@@ -743,6 +906,25 @@ def _approve_action(action_id: str, approved_by: str, final_message: str | None)
         },
     )
     put_clinic_actions(updated)
+    patient_request_id = item.get("patient_request_id", "")
+    if patient_request_id:
+        patient_request = get_clinic_patient_requests(_practice_id(), patient_request_id)
+        if patient_request is not None:
+            put_clinic_patient_requests(
+                cast(
+                    ClinicPatientRequestsItem,
+                    {
+                        **patient_request,
+                        "status": "completed",
+                        "approved_at": now,
+                        "approved_by": approved_by,
+                        "completed_at": now,
+                        "completion_note": COMPLETION_NOTE,
+                        "final_message": final_text,
+                        "updated_at": now,
+                    },
+                )
+            )
     return {
         "action": _action_dto(updated),
         "message": "approval stored; no external action was taken",
@@ -827,7 +1009,12 @@ def _store_google_token_secret(account_email: str, token_response: dict[str, Any
 
     import boto3
 
-    token_secret_prefix = os.environ.get("GOOGLE_TOKEN_SECRET_PREFIX", f"{CLINIC_ID}/clinic_agent/google").strip()
+    configured_prefix = os.environ.get("GOOGLE_TOKEN_SECRET_PREFIX", "").strip()
+    token_secret_prefix = (
+        f"{configured_prefix}/{_practice_id()}/clinic_agent/google"
+        if configured_prefix
+        else f"{_practice_id()}/clinic_agent/google"
+    )
     secret_id = f"{token_secret_prefix}/{_safe_secret_fragment(account_email)}"
     secret_payload = json.dumps(
         {
@@ -856,7 +1043,7 @@ def _connected_integration(
     now: str,
 ) -> ClinicIntegrationsItem:
     return {
-        "clinic_id": CLINIC_ID,
+        "clinic_id": _clinic_id(),
         "integration_id": integration_id,
         "provider": provider,
         "status": "connected",
@@ -874,6 +1061,28 @@ def _connected_integration(
         "connected_at": now,
         "updated_at": now,
     }
+
+
+def _record_practice_member(account_email: str, now: str) -> None:
+    normalized_email = account_email.strip().lower()
+    if not normalized_email:
+        return
+    member = cast(
+        ClinicPracticeMembersItem,
+        {
+            "practice_id": _practice_id(),
+            "member_email": normalized_email,
+            "member_id": _practice_member_id(normalized_email),
+            "display_name": account_email,
+            "role": "owner",
+            "status": "active",
+            "auth_provider": "google",
+            "last_login_at": now,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    put_clinic_practice_members(member)
 
 
 def _connect_google_workspace(account_email: str, token_response: dict[str, Any]) -> dict[str, Any]:
@@ -901,8 +1110,10 @@ def _connect_google_workspace(account_email: str, token_response: dict[str, Any]
     )
     put_clinic_integrations(calendar_integration)
     put_clinic_integrations(gmail_integration)
+    _record_practice_member(account_email, now)
     return {
         "message": "Google account connected through Auth.js. Tokens were stored in the configured secret store.",
+        "practiceId": _practice_id(),
         "integrations": [_integration_dto(calendar_integration), _integration_dto(gmail_integration)],
     }
 
@@ -916,10 +1127,10 @@ def _google_oauth_config() -> tuple[str, str]:
 
 
 def _connected_google_integration(integration_id: str) -> ClinicIntegrationsItem:
-    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    integration = get_clinic_integrations(_clinic_id(), integration_id)
     if integration is None:
         _list_integration_items()
-        integration = get_clinic_integrations(CLINIC_ID, integration_id)
+        integration = get_clinic_integrations(_clinic_id(), integration_id)
     if integration is None or not integration["token_secret_id"]:
         raise RuntimeError("Connect Google before reading Calendar or Gmail.")
     return integration
@@ -971,7 +1182,7 @@ def _google_client_for_integration(integration_id: str) -> tuple[ClinicIntegrati
 
 
 def _mark_integration_success(integration_id: str, synced_at: str) -> None:
-    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    integration = get_clinic_integrations(_clinic_id(), integration_id)
     if integration is None:
         return
     updated = cast(
@@ -988,7 +1199,7 @@ def _mark_integration_success(integration_id: str, synced_at: str) -> None:
 
 
 def _mark_integration_failure(integration_id: str, message: str) -> None:
-    integration = get_clinic_integrations(CLINIC_ID, integration_id)
+    integration = get_clinic_integrations(_clinic_id(), integration_id)
     if integration is None:
         return
     now = _now()
@@ -1087,7 +1298,7 @@ def _calendar_event_to_schedule_item(
     summary = _truncate(raw_summary, 120) if isinstance(raw_summary, str) and raw_summary else "Busy"
     raw_etag = event.get("etag")
     return {
-        "clinic_id": CLINIC_ID,
+        "clinic_id": _clinic_id(),
         "event_id": f"gcal-{_safe_external_fragment(external_event_id)}",
         "day_key": f"{start_at:%a} {start_at.day}",
         "day_label": f"{start_at:%A} {start_at.day} {start_at:%b}",
@@ -1110,9 +1321,9 @@ def _calendar_event_to_schedule_item(
 
 
 def _replace_google_schedule_cache(items: list[ClinicScheduleItem]) -> None:
-    for existing in query_clinic_schedule(CLINIC_ID, scan_index_forward=True, consistent_read=True):
+    for existing in query_clinic_schedule(_clinic_id(), scan_index_forward=True, consistent_read=True):
         if existing["source_provider"] == "google_calendar":
-            delete_clinic_schedule(CLINIC_ID, existing["event_id"])
+            delete_clinic_schedule(_clinic_id(), existing["event_id"])
     for item in items:
         put_clinic_schedule(item)
 
@@ -1607,12 +1818,65 @@ def _draft_reply_for_message(
     )
 
 
-def _gmail_message_to_action_item(
+def _slot_constraints_record(constraints: SlotConstraints) -> dict[str, Any]:
+    return {
+        "preferred_weekdays": [WEEKDAY_ALIASES[weekday][0] for weekday in sorted(constraints["preferred_weekdays"])],
+        "earliest_date": constraints["earliest_date"].isoformat() if constraints["earliest_date"] is not None else "",
+        "latest_date": constraints["latest_date"].isoformat() if constraints["latest_date"] is not None else "",
+        "daily_start": constraints["daily_start"].strftime("%H:%M") if constraints["daily_start"] is not None else "",
+        "daily_end": constraints["daily_end"].strftime("%H:%M") if constraints["daily_end"] is not None else "",
+        "notes": list(constraints["notes"]),
+    }
+
+
+def _action_priority_for_intent(intent: str) -> str:
+    if intent == "reschedule":
+        return "action"
+    if intent == "reminder":
+        return "info"
+    return "new"
+
+
+def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicActionsItem:
+    action_kind = REPLY_REVIEW_ACTION_KIND
+    return {
+        "clinic_id": _clinic_id(),
+        "action_id": _request_action_id(item["patient_request_id"], action_kind),
+        "action_type": item["intent"],
+        "priority": _action_priority_for_intent(item["intent"]),
+        "status": item["status"],
+        "patient_id": item["patient_id"],
+        "patient_name": item["patient_name"],
+        "patient_request_id": item["patient_request_id"],
+        "time_label": item["time_label"],
+        "source_summary": item["source_summary"],
+        "source_message": item["source_excerpt"],
+        "draft_message": item["draft_message"],
+        "external_draft_id": "",
+        "external_sent_message_id": "",
+        "final_message": item["final_message"],
+        "metadata": {
+            "action_kind": action_kind,
+            "patient_request_id": item["patient_request_id"],
+        },
+        "source_provider": item["source_provider"],
+        "source_thread_id": item["source_thread_id"],
+        "source_message_id": item["source_message_id"],
+        "approved_at": item["approved_at"],
+        "approved_by": item["approved_by"],
+        "completed_at": item["completed_at"],
+        "completion_note": item["completion_note"],
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def _gmail_message_to_patient_request_item(
     message: dict[str, Any],
     *,
     patient_by_email: dict[str, ClinicPatientsItem],
     synced_at: str,
-) -> ClinicActionsItem | None:
+) -> ClinicPatientRequestsItem | None:
     message_id = message.get("id")
     if not isinstance(message_id, str) or not message_id:
         return None
@@ -1629,7 +1893,7 @@ def _gmail_message_to_action_item(
     summary = _truncate(subject or snippet or "New Gmail message", 120)
     source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{snippet}".strip(), 1200)
     request_text = f"{subject} {snippet}"
-    action_type, priority = _infer_gmail_action_type(request_text)
+    intent, _ = _infer_gmail_action_type(request_text)
     appointment_kind, duration_minutes = _request_appointment_details(request_text)
     constraints = _slot_constraints_from_text(request_text)
     slot_labels = _suggest_free_slot_labels(
@@ -1640,27 +1904,34 @@ def _gmail_message_to_action_item(
     created_at = _gmail_message_datetime(message, headers)
     thread_id = message.get("threadId")
     localized = created_at.astimezone(_clinic_timezone())
+    patient_request_id = f"gmail-{_safe_external_fragment(message_id)}"
+    draft_message = _draft_reply_for_message(
+        patient_name,
+        summary,
+        appointment_kind=appointment_kind,
+        slot_labels=slot_labels,
+        request_text=request_text,
+    )
 
     return {
-        "clinic_id": CLINIC_ID,
-        "action_id": f"gmail-{_safe_external_fragment(message_id)}",
-        "action_type": action_type,
-        "priority": priority,
-        "status": "needs_approval",
+        "practice_id": _practice_id(),
+        "patient_request_id": patient_request_id,
         "patient_id": patient_id,
         "patient_name": patient_name,
+        "patient_email": sender_email,
         "time_label": localized.strftime("%I:%M %p").lstrip("0"),
         "source_summary": summary,
-        "source_message": source_message,
-        "draft_message": _draft_reply_for_message(
-            patient_name,
-            summary,
-            appointment_kind=appointment_kind,
-            slot_labels=slot_labels,
-            request_text=request_text,
-        ),
-        "external_draft_id": "",
-        "external_sent_message_id": "",
+        "source_excerpt": source_message,
+        "source_subject": subject,
+        "draft_message": draft_message,
+        "appointment_type": appointment_kind,
+        "duration_minutes": duration_minutes,
+        "intent": intent,
+        "proposed_windows": slot_labels,
+        "request_constraints": _slot_constraints_record(constraints),
+        "triage_confidence": 0.9 if matched_patient else 0.72,
+        "triage_reason": "Matched clinic scheduling language in Gmail metadata.",
+        "status": "needs_approval",
         "final_message": "",
         "source_provider": "gmail",
         "source_thread_id": thread_id if isinstance(thread_id, str) else "",
@@ -1674,12 +1945,54 @@ def _gmail_message_to_action_item(
     }
 
 
-def _replace_open_gmail_action_candidates(items: list[ClinicActionsItem]) -> None:
-    for existing in query_clinic_actions(CLINIC_ID, scan_index_forward=True, consistent_read=True):
-        if existing["source_provider"] == "gmail" and existing["status"] != "completed":
-            delete_clinic_actions(CLINIC_ID, existing["action_id"])
+def _merge_patient_request_candidate(
+    existing: ClinicPatientRequestsItem | None,
+    incoming: ClinicPatientRequestsItem,
+) -> ClinicPatientRequestsItem:
+    if existing is None:
+        return incoming
+    existing_data = cast(dict[str, Any], existing)
+    merged_data: dict[str, Any] = {**existing_data, **incoming}
+    merged = cast(ClinicPatientRequestsItem, merged_data)
+    merged["created_at"] = str(existing_data.get("created_at", incoming["created_at"]))
+    existing_status = existing_data.get("status")
+    if isinstance(existing_status, str) and existing_status and existing_status != "needs_approval":
+        merged["status"] = existing_status
+    for key in ("approved_at", "approved_by", "completed_at", "completion_note", "final_message"):
+        if existing_data.get(key):
+            merged_data[key] = existing_data[key]
+    return merged
+
+
+def _merge_action_candidate(existing: ClinicActionsItem | None, incoming: ClinicActionsItem) -> ClinicActionsItem:
+    if existing is None:
+        return incoming
+    existing_data = cast(dict[str, Any], existing)
+    merged_data: dict[str, Any] = {**existing_data, **incoming}
+    merged = cast(ClinicActionsItem, merged_data)
+    merged["created_at"] = str(existing_data.get("created_at", incoming["created_at"]))
+    existing_status = existing_data.get("status")
+    if isinstance(existing_status, str) and existing_status and existing_status != "needs_approval":
+        merged["status"] = existing_status
+    for key in ("approved_at", "approved_by", "completed_at", "completion_note", "final_message"):
+        if existing_data.get(key):
+            merged_data[key] = existing_data[key]
+    return merged
+
+
+def _upsert_gmail_request_candidates(items: list[ClinicPatientRequestsItem]) -> list[ClinicActionsItem]:
+    action_items: list[ClinicActionsItem] = []
     for item in items:
-        put_clinic_actions(item)
+        existing_request = get_clinic_patient_requests(_practice_id(), item["patient_request_id"])
+        request_item = _merge_patient_request_candidate(existing_request, item)
+        put_clinic_patient_requests(request_item)
+
+        action_item = _patient_request_to_action_item(request_item)
+        existing_action = get_clinic_actions(_clinic_id(), action_item["action_id"])
+        merged_action = _merge_action_candidate(existing_action, action_item)
+        put_clinic_actions(merged_action)
+        action_items.append(merged_action)
+    return action_items
 
 
 def _sync_google_calendar() -> dict[str, Any]:
@@ -1726,42 +2039,51 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         messages = client.list_gmail_message_metadata(query=GMAIL_SCAN_QUERY, max_results=GMAIL_SCAN_MAX_MESSAGES)
         patient_by_email = _patient_lookup_by_email()
         synced_at = _now()
-        action_items: list[ClinicActionsItem] = []
+        request_items: list[ClinicPatientRequestsItem] = []
         for message in messages:
-            item = _gmail_message_to_action_item(message, patient_by_email=patient_by_email, synced_at=synced_at)
+            item = _gmail_message_to_patient_request_item(
+                message,
+                patient_by_email=patient_by_email,
+                synced_at=synced_at,
+            )
             if item is None:
                 continue
-            existing = get_clinic_actions(CLINIC_ID, item["action_id"])
-            if existing and existing["status"] == "completed":
+            existing_request = get_clinic_patient_requests(_practice_id(), item["patient_request_id"])
+            action_id = _request_action_id(item["patient_request_id"], REPLY_REVIEW_ACTION_KIND)
+            existing_action = get_clinic_actions(_clinic_id(), action_id)
+            if (existing_request and existing_request["status"] in COMPLETED_STATUSES) or (
+                existing_action and existing_action["status"] in COMPLETED_STATUSES
+            ):
                 continue
-            action_items.append(item)
+            request_items.append(item)
 
-        _replace_open_gmail_action_candidates(action_items)
+        sorted_requests = sorted(request_items, key=lambda item: item["created_at"], reverse=True)
+        sorted_actions = _upsert_gmail_request_candidates(sorted_requests)
         _mark_integration_success("gmail", synced_at)
-        sorted_actions = sorted(action_items, key=lambda item: item["created_at"], reverse=True)
         return {
             "status": "synced",
             "sourceOfTruth": "gmail",
             "writeMode": "read_inbox_prepare_in_app_drafts",
             "externalWrites": 0,
             "messagesScanned": len(messages),
-            "proposedActions": len(action_items),
-            "message": "Gmail read completed. In-app action drafts were prepared; no email was sent or drafted in Gmail.",
+            "proposedActions": len(request_items),
+            "practiceId": _practice_id(),
+            "message": "Gmail read completed. Patient requests and in-app drafts were prepared; no email was sent or drafted in Gmail.",
             "actions": [_action_dto(item) for item in sorted_actions],
+            "patientRequests": [_patient_request_dto(item) for item in sorted_requests],
         }
     except (GoogleWorkspaceError, RuntimeError) as exc:
         _mark_integration_failure("gmail", str(exc))
         raise RuntimeError(str(exc)) from exc
 
 
-def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
-    """Route clinic app actions."""
-    _ = context
-    payload = event or {}
+def _handle_payload(payload: dict[str, Any]) -> dict[str, Any]:
     action = str(payload.get("action", "list_actions"))
 
     if action == "list_actions":
         return json_response(200, _list_actions(bool(payload.get("includeCompleted", False))))
+    if action == "list_patient_requests":
+        return json_response(200, _list_patient_requests(bool(payload.get("includeCompleted", False))))
     if action == "approve_action":
         action_id = str(payload.get("actionId", "")).strip()
         if not action_id:
@@ -1803,3 +2125,19 @@ def lambda_handler(event: dict[str, Any] | None, context: object | None = None) 
             return json_response(400, {"error": str(exc)})
 
     return json_response(400, {"error": f"unsupported action: {action}"})
+
+
+def lambda_handler(event: dict[str, Any] | None, context: object | None = None) -> dict[str, Any]:
+    """Route clinic app actions."""
+    _ = context
+    payload = event or {}
+    try:
+        actor_email = _verify_actor_assertion(payload)
+    except RuntimeError as exc:
+        return json_response(401, {"error": str(exc)})
+    practice_id = _practice_id_for_actor(actor_email)
+    token = _CURRENT_PRACTICE_ID.set(practice_id)
+    try:
+        return _handle_payload(payload)
+    finally:
+        _CURRENT_PRACTICE_ID.reset(token)

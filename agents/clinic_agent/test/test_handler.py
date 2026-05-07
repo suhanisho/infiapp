@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
+import hashlib
+import hmac
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 import sys
@@ -80,6 +82,21 @@ def fake_id_token(email: str) -> str:
     return f"header.{payload}.signature"
 
 
+def trusted_actor_fields(email: str, secret: str = "test-internal-secret") -> dict[str, str]:
+    normalized = email.strip().lower()
+    issued_at = str(int(datetime.now(timezone.utc).timestamp()))
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        f"{normalized}:{issued_at}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "actorEmail": normalized,
+        "actorIssuedAt": issued_at,
+        "actorSignature": signature,
+    }
+
+
 class ClinicAgentTest(unittest.TestCase):
     def test_lists_seed_actions_when_table_is_empty(self) -> None:
         with (
@@ -95,10 +112,44 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["actions"][0]["status"], "needs_approval")
         put_action.assert_called()
 
+    def test_actor_email_derives_practice_scope(self) -> None:
+        expected_practice_id = handler_module._practice_id_for_actor("doctor@example.com")
+        with (
+            patch.dict(handler_module.os.environ, {"CLINIC_AGENT_INTERNAL_SECRET": "test-internal-secret"}),
+            patch.object(handler_module, "query_clinic_actions", return_value=[]) as query_actions,
+            patch.object(handler_module, "get_clinic_integrations", return_value={"last_sync_at": "2026-05-07"}),
+        ):
+            response = lambda_handler(
+                {
+                    "action": "list_actions",
+                    **trusted_actor_fields("doctor@example.com"),
+                    "includeCompleted": True,
+                }
+            )
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["practiceId"], expected_practice_id)
+        query_actions.assert_called_once_with(expected_practice_id, scan_index_forward=True, consistent_read=True)
+
+    def test_actor_email_requires_trusted_assertion(self) -> None:
+        response = lambda_handler(
+            {
+                "action": "list_actions",
+                "actorEmail": "doctor@example.com",
+                "includeCompleted": True,
+            }
+        )
+
+        self.assertEqual(response["statusCode"], 401)
+        body = json.loads(response["body"])
+        self.assertIn("Trusted actor assertion", body["error"])
+
     def test_approval_records_completion_without_external_side_effects(self) -> None:
         seed_action = handler_module.SEED_ACTIONS[0]
         with (
             patch.object(handler_module, "get_clinic_actions", return_value=seed_action),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
             patch.object(handler_module, "put_clinic_actions") as put_action,
         ):
             response = lambda_handler(
@@ -181,8 +232,9 @@ class ClinicAgentTest(unittest.TestCase):
                 "_suggest_free_slot_labels",
                 return_value=["Monday 11 May, 9:00 AM - 9:45 AM (Initial Consultation)"],
             ),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
             patch.object(handler_module, "get_clinic_actions", return_value=None),
-            patch.object(handler_module, "_replace_open_gmail_action_candidates") as replace_actions,
+            patch.object(handler_module, "_upsert_gmail_request_candidates", side_effect=lambda items: [handler_module._patient_request_to_action_item(item) for item in items]) as upsert_requests,
             patch.object(handler_module, "_mark_integration_success") as mark_success,
         ):
             response = lambda_handler({"action": "scan_gmail_inbox"})
@@ -196,8 +248,53 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["proposedActions"], 1)
         self.assertIn("no email was sent", body["message"])
         self.assertIn("Monday 11 May", body["actions"][0]["draftMessage"])
-        replace_actions.assert_called_once()
+        self.assertEqual(body["actions"][0]["patientRequestId"], "gmail-gmail-message-live-1")
+        self.assertNotEqual(body["actions"][0]["actionId"], body["actions"][0]["patientRequestId"])
+        self.assertEqual(body["patientRequests"][0]["patientRequestId"], "gmail-gmail-message-live-1")
+        upsert_requests.assert_called_once()
         mark_success.assert_called_once()
+
+    def test_request_action_id_is_distinct_from_patient_request_id(self) -> None:
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0],
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        action_item = handler_module._patient_request_to_action_item(request_item)
+
+        self.assertEqual(action_item["patient_request_id"], request_item["patient_request_id"])
+        self.assertNotEqual(action_item["action_id"], request_item["patient_request_id"])
+        self.assertEqual(action_item["metadata"]["action_kind"], handler_module.REPLY_REVIEW_ACTION_KIND)
+
+    def test_patient_request_merge_preserves_existing_state(self) -> None:
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            incoming = handler_module._gmail_message_to_patient_request_item(
+                FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0],
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+        self.assertIsNotNone(incoming)
+        incoming = cast(Any, incoming)
+        existing = cast(
+            dict[str, Any],
+            {
+                **incoming,
+                "created_at": "2026-05-01T00:00:00+00:00",
+                "triage_reason": "Manually reviewed by the doctor.",
+                "manual_note": "Keep this note.",
+            },
+        )
+
+        merged = cast(
+            dict[str, Any],
+            handler_module._merge_patient_request_candidate(cast(Any, existing), incoming),
+        )
+
+        self.assertEqual(merged["created_at"], "2026-05-01T00:00:00+00:00")
+        self.assertEqual(merged["manual_note"], "Keep this note.")
 
     def test_meet_and_greet_draft_uses_short_calendar_slots(self) -> None:
         appointment_kind, duration_minutes = handler_module._request_appointment_details(
@@ -276,13 +373,16 @@ class ClinicAgentTest(unittest.TestCase):
             "id_token": fake_id_token("doctor@example.com"),
         }
         with (
+            patch.dict(handler_module.os.environ, {"CLINIC_AGENT_INTERNAL_SECRET": "test-internal-secret"}),
             patch.object(handler_module, "_store_google_token_secret", return_value="secret/google/doctor") as store,
             patch.object(handler_module, "put_clinic_integrations") as put_integration,
+            patch.object(handler_module, "put_clinic_practice_members") as put_member,
         ):
             response = lambda_handler(
                 {
                     "action": "connect_google_workspace",
                     "accountEmail": "doctor@example.com",
+                    **trusted_actor_fields("doctor@example.com"),
                     "tokenResponse": token_response,
                 }
             )
@@ -295,6 +395,7 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["integrations"][0]["status"], "connected")
         store.assert_called_once()
         self.assertEqual(put_integration.call_count, 2)
+        put_member.assert_called_once()
 
 
 if __name__ == "__main__":

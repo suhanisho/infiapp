@@ -9,7 +9,7 @@ export async function GET() {
   }
 
   try {
-    const response = await callClinicAgentListIntegrations({});
+    const response = await callClinicAgentListIntegrations({ actorEmail: session.user?.email || "" });
     return NextResponse.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load integrations";

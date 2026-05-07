@@ -35,8 +35,15 @@ function allowedClinicEmails() {
     .filter(Boolean);
 }
 
+function selfOnboardingIsEnabled() {
+  return process.env.CLINIC_ALLOW_SELF_ONBOARDING === "true";
+}
+
 function clinicEmailIsAllowed(email: string) {
   const allowedEmails = allowedClinicEmails();
+  if (selfOnboardingIsEnabled()) {
+    return Boolean(email.trim());
+  }
   if (allowedEmails.length === 0) {
     return mockAuthIsConfigured() || process.env.NODE_ENV !== "production";
   }
@@ -106,6 +113,7 @@ async function storeGoogleConnection(accountEmail: string, account: Account) {
   const tokenResponse = tokenResponseFromAccount(account);
   await callClinicAgentConnectGoogleWorkspace({
     accountEmail,
+    actorEmail: accountEmail,
     tokenResponse,
   });
 }

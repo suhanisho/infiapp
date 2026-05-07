@@ -9,7 +9,7 @@ export async function GET() {
   }
 
   try {
-    const response = await callClinicAgentListSchedule({});
+    const response = await callClinicAgentListSchedule({ actorEmail: session.user?.email || "" });
     return NextResponse.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load schedule";

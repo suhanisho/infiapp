@@ -10,6 +10,7 @@
       "description": "Records explicit doctor approval for an action and stores it as completed without sending messages or updating calendars.",
       "input": {
         "actionId": "String",
+        "actorEmail?": "String",
         "approvedBy?": "String",
         "finalMessage?": "String"
       },
@@ -26,9 +27,12 @@
           "externalDraftId": "String | Null",
           "externalSentMessageId": "String | Null",
           "finalMessage": "String | Null",
+          "metadata": "Map",
           "patientId": "String | Null",
           "patientName": "String | Null",
+          "patientRequestId": "String | Null",
           "priority": "String",
+          "practiceId": "String",
           "sourceMessage": "String | Null",
           "sourceMessageId": "String | Null",
           "sourceProvider": "String",
@@ -46,6 +50,7 @@
       "description": "Stores Auth.js-verified Google token material in a secret store and records safe Google Workspace connection metadata.",
       "input": {
         "accountEmail": "String",
+        "actorEmail?": "String",
         "tokenResponse": "Map"
       },
       "output": {
@@ -63,13 +68,15 @@
             "writeMode": "String"
           }
         ],
-        "message": "String"
+        "message": "String",
+        "practiceId": "String"
       }
     },
     {
       "call": "list_actions",
       "description": "Lists durable action queue records, including completed records when requested for future validation.",
       "input": {
+        "actorEmail?": "String",
         "includeCompleted?": "Boolean"
       },
       "output": {
@@ -86,9 +93,12 @@
             "externalDraftId": "String | Null",
             "externalSentMessageId": "String | Null",
             "finalMessage": "String | Null",
+            "metadata": "Map",
             "patientId": "String | Null",
             "patientName": "String | Null",
+            "patientRequestId": "String | Null",
             "priority": "String",
+            "practiceId": "String",
             "sourceMessage": "String | Null",
             "sourceMessageId": "String | Null",
             "sourceProvider": "String",
@@ -98,13 +108,59 @@
             "timeLabel": "String",
             "updatedAt": "String"
           }
-        ]
+        ],
+        "practiceId": "String"
+      }
+    },
+    {
+      "call": "list_patient_requests",
+      "description": "Lists patient request records, which are the main durable entity behind email triage, drafts, approvals, and future calendar actions.",
+      "input": {
+        "actorEmail?": "String",
+        "includeCompleted?": "Boolean"
+      },
+      "output": {
+        "patientRequests": [
+          {
+            "appointmentType": "String",
+            "approvedAt": "String | Null",
+            "approvedBy": "String | Null",
+            "completedAt": "String | Null",
+            "completionNote": "String | Null",
+            "createdAt": "String",
+            "draftMessage": "String | Null",
+            "durationMinutes": "Number",
+            "finalMessage": "String | Null",
+            "intent": "String",
+            "patientEmail": "String | Null",
+            "patientId": "String | Null",
+            "patientName": "String | Null",
+            "patientRequestId": "String",
+            "practiceId": "String",
+            "proposedWindows": "List",
+            "requestConstraints": "Map",
+            "sourceExcerpt": "String | Null",
+            "sourceMessageId": "String | Null",
+            "sourceProvider": "String",
+            "sourceSubject": "String | Null",
+            "sourceSummary": "String",
+            "sourceThreadId": "String | Null",
+            "status": "String",
+            "timeLabel": "String",
+            "triageConfidence": "Number",
+            "triageReason": "String",
+            "updatedAt": "String"
+          }
+        ],
+        "practiceId": "String"
       }
     },
     {
       "call": "list_patients",
       "description": "Lists patient directory records used by the doctor-facing app.",
-      "input": {},
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "patients": [
           {
@@ -124,7 +180,9 @@
     {
       "call": "list_integrations",
       "description": "Lists Google Workspace integration status, required scopes, and safety modes.",
-      "input": {},
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "integrations": [
           {
@@ -150,7 +208,9 @@
     {
       "call": "list_schedule",
       "description": "Lists the weekly clinic schedule without writing to an external calendar.",
-      "input": {},
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "days": [
           {
@@ -179,7 +239,9 @@
     {
       "call": "list_settings",
       "description": "Lists clinic availability, appointment types, and operating preferences.",
-      "input": {},
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "appointmentTypes": [
           {
@@ -206,8 +268,10 @@
     },
     {
       "call": "scan_gmail_inbox",
-      "description": "Reads Gmail message candidates and prepares in-app action drafts without sending, labeling, or creating Gmail drafts.",
-      "input": {},
+      "description": "Reads Gmail message candidates and prepares patient requests plus in-app action drafts without sending, labeling, or creating Gmail drafts.",
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "actions": [
           {
@@ -222,9 +286,12 @@
             "externalDraftId": "String | Null",
             "externalSentMessageId": "String | Null",
             "finalMessage": "String | Null",
+            "metadata": "Map",
             "patientId": "String | Null",
             "patientName": "String | Null",
+            "patientRequestId": "String | Null",
             "priority": "String",
+            "practiceId": "String",
             "sourceMessage": "String | Null",
             "sourceMessageId": "String | Null",
             "sourceProvider": "String",
@@ -238,6 +305,39 @@
         "externalWrites": "Number",
         "message": "String",
         "messagesScanned": "Number",
+        "patientRequests": [
+          {
+            "appointmentType": "String",
+            "approvedAt": "String | Null",
+            "approvedBy": "String | Null",
+            "completedAt": "String | Null",
+            "completionNote": "String | Null",
+            "createdAt": "String",
+            "draftMessage": "String | Null",
+            "durationMinutes": "Number",
+            "finalMessage": "String | Null",
+            "intent": "String",
+            "patientEmail": "String | Null",
+            "patientId": "String | Null",
+            "patientName": "String | Null",
+            "patientRequestId": "String",
+            "practiceId": "String",
+            "proposedWindows": "List",
+            "requestConstraints": "Map",
+            "sourceExcerpt": "String | Null",
+            "sourceMessageId": "String | Null",
+            "sourceProvider": "String",
+            "sourceSubject": "String | Null",
+            "sourceSummary": "String",
+            "sourceThreadId": "String | Null",
+            "status": "String",
+            "timeLabel": "String",
+            "triageConfidence": "Number",
+            "triageReason": "String",
+            "updatedAt": "String"
+          }
+        ],
+        "practiceId": "String",
         "proposedActions": "Number",
         "sourceOfTruth": "String",
         "status": "String",
@@ -247,7 +347,9 @@
     {
       "call": "sync_google_calendar",
       "description": "Reads Google Calendar as the source of truth and refreshes the local schedule cache without writing to Google Calendar.",
-      "input": {},
+      "input": {
+        "actorEmail?": "String"
+      },
       "output": {
         "appointmentsCached": "Number",
         "days": [

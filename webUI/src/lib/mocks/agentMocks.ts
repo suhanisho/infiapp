@@ -7,9 +7,11 @@ type MockAction = {
   actionId: string;
   actionType: string;
   priority: string;
+  practiceId: string;
   status: string;
   patientId: string | null;
   patientName: string | null;
+  patientRequestId: string | null;
   timeLabel: string;
   sourceSummary: string;
   sourceMessage: string | null;
@@ -23,10 +25,13 @@ type MockAction = {
   updatedAt: string;
   externalDraftId: string | null;
   externalSentMessageId: string | null;
+  metadata: Record<string, unknown>;
   sourceProvider: string;
   sourceThreadId: string | null;
   sourceMessageId: string | null;
 };
+
+const mockPracticeId = "practice_mock_doctor";
 
 type MockIntegration = {
   integrationId: string;
@@ -48,9 +53,11 @@ const actions: MockAction[] = [
     actionId: "act_001",
     actionType: "enquiry",
     priority: "new",
+    practiceId: mockPracticeId,
     status: "needs_approval",
     patientId: "p10",
     patientName: "Rachel Davies",
+    patientRequestId: "seed-request-rachel-davies",
     timeLabel: "9:41 AM",
     sourceSummary: "New patient referred by GP, wants initial consultation",
     sourceMessage:
@@ -62,6 +69,7 @@ const actions: MockAction[] = [
       "Dear Rachel,\n\nThank you for getting in touch, and welcome. I have the following afternoon slots available:\n\n- Wednesday 30 Apr at 2:00 PM\n- Friday 2 May at 3:15 PM\n- Monday 5 May at 2:30 PM\n\nInitial consultations are 45 minutes. Please let me know which works best and I will confirm your booking.\n\nWarm regards,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
+    metadata: {},
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -74,9 +82,11 @@ const actions: MockAction[] = [
     actionId: "act_002",
     actionType: "reschedule",
     priority: "action",
+    practiceId: mockPracticeId,
     status: "needs_approval",
     patientId: "p8",
     patientName: "Fatima Ali",
+    patientRequestId: "seed-request-fatima-ali",
     timeLabel: "8:15 AM",
     sourceSummary: "Wants to move Friday appointment to next week",
     sourceMessage:
@@ -88,6 +98,7 @@ const actions: MockAction[] = [
       "Dear Fatima,\n\nOf course, no problem at all. I can offer the following options for next week:\n\n- Monday 5 May at 11:00 AM\n- Tuesday 6 May at 10:30 AM\n- Tuesday 6 May at 3:00 PM\n\nPlease let me know your preference.\n\nBest wishes,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
+    metadata: {},
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -100,9 +111,11 @@ const actions: MockAction[] = [
     actionId: "act_003",
     actionType: "nhs",
     priority: "info",
+    practiceId: mockPracticeId,
     status: "proposed",
     patientId: null,
     patientName: null,
+    patientRequestId: "seed-request-nhs-clinic",
     timeLabel: "7:30 AM",
     sourceSummary: "NHS clinic confirmed for Wednesday",
     sourceMessage: "Wednesday 30 Apr, 8:30 AM - 1:00 PM\nSt Mary's Hospital, Praed Street\n4 patients scheduled",
@@ -112,6 +125,7 @@ const actions: MockAction[] = [
     draftMessage: null,
     externalDraftId: null,
     externalSentMessageId: null,
+    metadata: {},
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -124,9 +138,11 @@ const actions: MockAction[] = [
     actionId: "act_004",
     actionType: "reminder",
     priority: "info",
+    practiceId: mockPracticeId,
     status: "needs_approval",
     patientId: "p9",
     patientName: "Priya Sharma",
+    patientRequestId: "seed-request-priya-sharma",
     timeLabel: "Auto",
     sourceSummary: "Follow-up due - last seen 4 weeks ago",
     sourceMessage: null,
@@ -137,6 +153,7 @@ const actions: MockAction[] = [
       "Dear Priya,\n\nI hope you are well. It has been about four weeks since your last visit and I would like to schedule a follow-up to review your progress. I have availability on:\n\n- Friday 2 May at 10:00 AM\n- Monday 5 May at 9:30 AM\n\nPlease let me know if either works, or suggest a time that suits you better.\n\nBest wishes,\nDr. Shalini's Clinic",
     externalDraftId: null,
     externalSentMessageId: null,
+    metadata: {},
     finalMessage: null,
     approvedAt: null,
     approvedBy: null,
@@ -370,6 +387,39 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function patientRequestFromAction(action: MockAction) {
+  return {
+    appointmentType: action.actionType === "reminder" ? "Follow-up" : "Initial Consultation",
+    approvedAt: action.approvedAt,
+    approvedBy: action.approvedBy,
+    completedAt: action.completedAt,
+    completionNote: action.completionNote,
+    createdAt: action.createdAt,
+    draftMessage: action.draftMessage,
+    durationMinutes: action.actionType === "reminder" ? 20 : 45,
+    finalMessage: action.finalMessage,
+    intent: action.actionType,
+    patientEmail: null,
+    patientId: action.patientId,
+    patientName: action.patientName,
+    patientRequestId: action.patientRequestId || action.actionId,
+    practiceId: action.practiceId,
+    proposedWindows: [],
+    requestConstraints: {},
+    sourceExcerpt: action.sourceMessage,
+    sourceMessageId: action.sourceMessageId,
+    sourceProvider: action.sourceProvider,
+    sourceSubject: action.sourceSummary,
+    sourceSummary: action.sourceSummary,
+    sourceThreadId: action.sourceThreadId,
+    status: action.status,
+    timeLabel: action.timeLabel,
+    triageConfidence: 0.9,
+    triageReason: "Mock patient request generated from the demo action queue.",
+    updatedAt: action.updatedAt,
+  };
+}
+
 function assertPayload(payload: unknown): MockPayload {
   if (!payload || typeof payload !== "object") {
     throw new Error("mock payload must be an object");
@@ -417,6 +467,19 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
     const includeCompleted = payload.includeCompleted === true;
     return {
       actions: clone(actions.filter((item) => includeCompleted || item.status !== "completed")),
+      practiceId: mockPracticeId,
+    };
+  }
+  if (payload.action === "list_patient_requests") {
+    const includeCompleted = payload.includeCompleted === true;
+    return {
+      patientRequests: clone(
+        actions
+          .filter((item) => item.sourceProvider === "gmail")
+          .filter((item) => includeCompleted || item.status !== "completed")
+          .map(patientRequestFromAction),
+      ),
+      practiceId: mockPracticeId,
     };
   }
   if (payload.action === "approve_action") {
@@ -452,6 +515,7 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
     return {
       integrations: clone(integrations),
       message: "Google account connected. Tokens were stored in the configured secret store.",
+      practiceId: mockPracticeId,
     };
   }
   if (payload.action === "sync_google_calendar") {
@@ -492,6 +556,8 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
       proposedActions: gmailActions.length,
       message: "Gmail read completed. In-app action drafts were prepared; no email was sent or drafted in Gmail.",
       actions: clone(gmailActions),
+      patientRequests: clone(gmailActions.map(patientRequestFromAction)),
+      practiceId: mockPracticeId,
     };
   }
 

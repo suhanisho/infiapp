@@ -9,7 +9,7 @@ export async function POST() {
   }
 
   try {
-    const response = await callClinicAgentSyncGoogleCalendar({});
+    const response = await callClinicAgentSyncGoogleCalendar({ actorEmail: session.user?.email || "" });
     return NextResponse.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to sync Google Calendar";
