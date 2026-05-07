@@ -64,6 +64,7 @@ function actionTypeLabel(type: string) {
     appointment_request: "Appointment",
     billing_payment: "Billing",
     enquiry: "New enquiry",
+    follow_up: "Follow-up",
     general_logistics: "Logistics",
     prescription_admin_request: "Prescription/admin",
     reschedule: "Reschedule",
@@ -187,15 +188,40 @@ function scheduleEventsForToday(days: ScheduleDay[]) {
   return activeScheduleEvents(today ? [today] : days.slice(0, 1));
 }
 
-function nextEventLabel(events: ScheduleEvent[]) {
-  const nextEvent = events[0];
-  if (!nextEvent) {
-    return "No appointments loaded";
+function roundsGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) {
+    return "Good morning, Doctor";
   }
-  return `${nextEvent.startTime} ${nextEvent.patientName}`;
+  if (hour < 18) {
+    return "Good afternoon, Doctor";
+  }
+  return "Good evening, Doctor";
 }
 
-function DailyCockpit({
+function roundsDateLabel() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    weekday: "long",
+  }).formatToParts(new Date());
+  const weekday = parts.find((part) => part.type === "weekday")?.value || "";
+  const day = parts.find((part) => part.type === "day")?.value || "";
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  return `${weekday} · ${day} ${month} · ready for rounds`;
+}
+
+function briefingCopy(openActions: ClinicAction[], scheduleEvents: ScheduleEvent[]) {
+  const appointmentCopy =
+    scheduleEvents.length === 0
+      ? "Calendar context has not been read yet."
+      : scheduleEvents.length === 1
+        ? `One appointment is on the calendar at ${scheduleEvents[0].startTime}.`
+        : `${scheduleEvents.length} appointments are on the calendar; next at ${scheduleEvents[0].startTime}.`;
+  return `${appointmentCopy} ${nextAttentionSummary(openActions)}`;
+}
+
+function Rounds({
   actions,
   days,
   loading,
@@ -219,15 +245,8 @@ function DailyCockpit({
   );
   const pendingCount = openActions.length;
   const clinicalReviewCount = openActions.filter(actionNeedsDoctorReview).length;
-  const appointmentActionCount = openActions.filter((action) =>
-    ["appointment_request", "reschedule_cancellation", "enquiry", "reschedule"].includes(action.actionType),
-  ).length;
   const scheduleEvents = scheduleEventsForToday(days);
-  const dayLabel = new Date().toLocaleDateString([], {
-    day: "numeric",
-    month: "short",
-    weekday: "long",
-  });
+  const schedulePreview = scheduleEvents.slice(0, 3);
 
   useEffect(() => {
     setDraftEdits((current) => {
@@ -242,42 +261,52 @@ function DailyCockpit({
   }, [actions]);
 
   return (
-    <section className="screen-panel" aria-labelledby="actions-title">
-      <div className="section-heading">
-        <p className="date-line">{dayLabel}</p>
-        <h1 id="actions-title">Daily cockpit</h1>
-      </div>
-
-      <div className="cockpit-overview" aria-label="Summary overview">
-        <article className="summary-tile">
-          <span>Appointments</span>
-          <strong>{scheduleEvents.length}</strong>
-          <small>{nextEventLabel(scheduleEvents)}</small>
-        </article>
-        <article className="summary-tile">
-          <span>Open actions</span>
-          <strong>{pendingCount}</strong>
-          <small>{nextAttentionSummary(openActions)}</small>
-        </article>
-        <article className="summary-tile">
-          <span>Clinical review</span>
-          <strong>{clinicalReviewCount}</strong>
-          <small>All clinical replies require approval</small>
-        </article>
-        <article className="summary-tile">
-          <span>Scheduling</span>
-          <strong>{appointmentActionCount}</strong>
-          <small>Calendar stays read-only</small>
-        </article>
+    <section className="screen-panel rounds-panel" aria-labelledby="rounds-title">
+      <div className="section-heading rounds-heading">
+        <h1 id="rounds-title">{roundsGreeting()}</h1>
+        <p className="date-line">{roundsDateLabel()}</p>
       </div>
 
       <div className="briefing">
-        <span className="briefing-label">Today</span>
-        <p>{nextAttentionSummary(openActions)} {scheduleEvents.length > 0 ? `Next appointment: ${nextEventLabel(scheduleEvents)}.` : "Read Calendar to load today's appointment context."}</p>
+        <span className="briefing-label">Today · Briefing</span>
+        <p>{briefingCopy(openActions, scheduleEvents)}</p>
+        <div className="briefing-metrics" aria-label="Rounds summary">
+          <span>
+            <strong>{scheduleEvents.length}</strong>
+            <small>Appointment{scheduleEvents.length === 1 ? "" : "s"}</small>
+          </span>
+          <span>
+            <strong>{pendingCount}</strong>
+            <small>Action{pendingCount === 1 ? "" : "s"}</small>
+          </span>
+          <span className={clinicalReviewCount > 0 ? "" : "is-muted"}>
+            <strong>{clinicalReviewCount}</strong>
+            <small>Review</small>
+          </span>
+        </div>
+      </div>
+
+      <div className="rounds-block">
+        <div className="rounds-block-title">Schedule</div>
+        {schedulePreview.length > 0 ? (
+          <div className="rounds-schedule-list">
+            {schedulePreview.map((event) => (
+              <article key={event.eventId} className="rounds-schedule-item">
+                <time>{event.startTime}</time>
+                <span>
+                  <strong>{event.patientName}</strong>
+                  <small>{event.appointmentType}</small>
+                </span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">Read Calendar to load today's appointment context.</div>
+        )}
       </div>
 
       <div className="queue-heading">
-        <h2>Open actions needing attention</h2>
+        <h2>Needs your attention</h2>
         <span>{pendingCount}</span>
       </div>
 
@@ -296,16 +325,24 @@ function DailyCockpit({
             <article key={action.actionId} className={`action-card priority-${action.priority}`}>
               <button
                 type="button"
-                className="row-button"
+                className="action-card-button"
                 onClick={() => setExpandedId(expanded ? null : action.actionId)}
                 aria-expanded={expanded}
               >
-                <span className={`type-marker ${priorityClass(action.priority)}`}>{actionTypeLabel(action.actionType)}</span>
-                <span className="row-copy">
+                <span className="action-chip-row">
+                  <span className={`type-marker ${priorityClass(action.priority)}`}>
+                    {actionTypeLabel(action.actionType)}
+                  </span>
+                  <span className={`status-pill status-${action.status}`}>{urgency}</span>
+                </span>
+                <span className="action-card-copy">
                   <strong>{action.patientName || action.sourceSummary}</strong>
                   <small>{action.patientName ? action.sourceSummary : action.sourceMessage}</small>
                 </span>
-                <span className={`status-pill status-${action.status}`}>{urgency}</span>
+                <span className="action-card-footer">
+                  <span>{action.timeLabel || statusLabel(action.status)}</span>
+                  <span>{expanded ? "Close" : "Review"}</span>
+                </span>
               </button>
 
               {expanded ? (
@@ -835,7 +872,7 @@ export function ClinicApp({
   }
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "actions", label: "Cockpit" },
+    { key: "actions", label: "Rounds" },
     { key: "schedule", label: "Schedule" },
     { key: "patients", label: "Patients" },
   ];
@@ -867,7 +904,7 @@ export function ClinicApp({
           <strong>Dr. Shalini&apos;s Clinic</strong>
           <span>{doctorEmail}</span>
         </div>
-        <span className="ai-badge">AI-assisted</span>
+        <span className="ai-badge">AI-powered</span>
       </header>
 
       {error ? <div className="error-banner">{error}</div> : null}
@@ -875,7 +912,7 @@ export function ClinicApp({
 
       <div className="app-content">
         {tab === "actions" ? (
-          <DailyCockpit
+          <Rounds
             actions={actions}
             days={days}
             loading={loading}
