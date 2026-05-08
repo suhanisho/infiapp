@@ -41,6 +41,10 @@ async function loadJson<T>(url: string): Promise<T> {
   return body;
 }
 
+function actionEndpoint(actionId: string, operation: "approve" | "book" | "send") {
+  return `/api/clinic/actions/${encodeURIComponent(actionId)}/${operation}`;
+}
+
 function statusLabel(status: string) {
   if (status === "needs_approval") {
     return "Needs approval";
@@ -1086,7 +1090,7 @@ export function ClinicApp({
     setApprovingId(action.actionId);
     setError("");
     try {
-      const response = await fetch(`/api/clinic/actions/${action.actionId}/approve`, {
+      const response = await fetch(actionEndpoint(action.actionId, "approve"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -1117,7 +1121,7 @@ export function ClinicApp({
     setError("");
     setNotice("");
     try {
-      const response = await fetch(`/api/clinic/actions/${action.actionId}/send`, {
+      const response = await fetch(actionEndpoint(action.actionId, "send"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -1152,7 +1156,7 @@ export function ClinicApp({
     setError("");
     setNotice("");
     try {
-      const response = await fetch(`/api/clinic/actions/${action.actionId}/book`, {
+      const response = await fetch(actionEndpoint(action.actionId, "book"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

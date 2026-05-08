@@ -18,7 +18,7 @@ export async function POST(request: Request, context: RouteContext) {
     const { actionId } = await context.params;
     const payload = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const response = await callClinicAgentApproveAction({
-      actionId,
+      actionId: decodeURIComponent(actionId),
       actorEmail: session.user?.email || "",
       approvedBy: typeof payload.approvedBy === "string" ? payload.approvedBy : "Dr. Shalini",
       finalMessage: typeof payload.finalMessage === "string" ? payload.finalMessage : undefined,
