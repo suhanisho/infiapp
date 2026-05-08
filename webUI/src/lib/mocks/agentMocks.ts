@@ -204,7 +204,7 @@ const actions: MockAction[] = [
   },
 ];
 
-const patients = [
+const basePatients = [
   {
     patientId: "p1",
     name: "Emma Richardson",
@@ -272,6 +272,33 @@ const patients = [
     notes: "New enquiry via email. Referred by Dr. Patel, Angel Medical Centre. Prefers afternoon appointments.",
   },
 ];
+
+const patients = basePatients.map((patient) => {
+  const timeline = actions
+    .filter((action) => action.patientId === patient.patientId && action.patientRequestId)
+    .map((action) => ({
+      actionId: action.actionId,
+      createdAt: action.createdAt,
+      description: action.sourceMessage || action.sourceSummary,
+      kind: "patient_request",
+      patientRequestId: action.patientRequestId || "",
+      requestType: action.actionType,
+      sourceMessageId: action.sourceMessageId,
+      sourceProvider: action.sourceProvider,
+      status: action.status,
+      timeLabel: action.timeLabel,
+      timelineId: `request-${action.patientRequestId}`,
+      title: action.sourceSummary,
+      updatedAt: action.updatedAt,
+    }));
+  return {
+    ...patient,
+    requestCount: timeline.length,
+    openRequestCount: timeline.filter((entry) => entry.status !== "completed").length,
+    lastRequestAt: timeline[0]?.createdAt || null,
+    timeline,
+  };
+});
 
 const scheduleDays = [
   {

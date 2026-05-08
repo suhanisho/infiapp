@@ -979,6 +979,48 @@ h1 {
   font-weight: 500;
 }
 
+.patient-timeline {
+  display: grid;
+  gap: 8px;
+}
+
+.patient-timeline > span {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.0875rem;
+  text-transform: uppercase;
+}
+
+.patient-timeline article {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px 11px;
+}
+
+.patient-timeline strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.94rem;
+  font-weight: 500;
+}
+
+.patient-timeline small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+
+.patient-timeline p {
+  color: var(--cream);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  margin-top: 8px;
+}
+
 .bottom-nav {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

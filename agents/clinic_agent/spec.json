@@ -173,12 +173,32 @@
           {
             "email": "String",
             "lastVisit": "String",
+            "lastRequestAt": "String | Null",
             "name": "String",
             "nextAppt": "String",
             "notes": "String",
+            "openRequestCount": "Number",
             "patientId": "String",
             "phone": "String",
+            "requestCount": "Number",
             "status": "String",
+            "timeline": [
+              {
+                "actionId": "String",
+                "createdAt": "String",
+                "description": "String",
+                "kind": "String",
+                "patientRequestId": "String",
+                "requestType": "String",
+                "sourceMessageId": "String | Null",
+                "sourceProvider": "String",
+                "status": "String",
+                "timeLabel": "String",
+                "timelineId": "String",
+                "title": "String",
+                "updatedAt": "String"
+              }
+            ],
             "visits": "Number"
           }
         ]

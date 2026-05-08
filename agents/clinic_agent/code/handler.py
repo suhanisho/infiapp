@@ -32,6 +32,7 @@ from generated.dynamodb import (
     get_clinic_actions,
     get_clinic_integrations,
     get_clinic_patient_requests,
+    get_clinic_patients,
     put_clinic_actions,
     put_clinic_integrations,
     put_clinic_patient_requests,
@@ -841,6 +842,21 @@ def _safe_external_fragment(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
 
 
+def _patient_id_for_email(email: str) -> str:
+    normalized = email.strip().lower()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+    return f"patient_email_{digest}"
+
+
+def _patient_display_name(sender_name: str, sender_email: str) -> str:
+    cleaned = sender_name.strip().strip('"')
+    if cleaned and "@" not in cleaned:
+        return cleaned
+    local_part = sender_email.split("@", 1)[0] if sender_email else ""
+    local_name = re.sub(r"[._+-]+", " ", local_part).strip()
+    return local_name.title() if local_name else sender_email or "Unknown patient"
+
+
 def _action_dto(item: ClinicActionsItem) -> dict[str, Any]:
     return {
         "actionId": item["action_id"],
@@ -911,7 +927,27 @@ def _patient_request_dto(item: ClinicPatientRequestsItem) -> dict[str, Any]:
     }
 
 
-def _patient_dto(item: ClinicPatientsItem) -> dict[str, Any]:
+def _patient_timeline_item(item: ClinicPatientRequestsItem) -> dict[str, Any]:
+    return {
+        "timelineId": f"request-{item['patient_request_id']}",
+        "kind": "patient_request",
+        "patientRequestId": item["patient_request_id"],
+        "actionId": "",
+        "title": item["source_summary"],
+        "description": item["triage_reason"] or item["source_excerpt"] or item["suggested_next_action"],
+        "status": item["status"],
+        "requestType": item["request_type"],
+        "sourceProvider": item["source_provider"],
+        "sourceMessageId": _optional_text(item["source_message_id"]),
+        "createdAt": item["created_at"],
+        "updatedAt": item["updated_at"],
+        "timeLabel": item["time_label"],
+    }
+
+
+def _patient_dto(item: ClinicPatientsItem, timeline: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    timeline_items = timeline or []
+    open_request_count = len([entry for entry in timeline_items if entry["status"] not in COMPLETED_STATUSES])
     return {
         "patientId": item["patient_id"],
         "name": item["name"],
@@ -922,6 +958,10 @@ def _patient_dto(item: ClinicPatientsItem) -> dict[str, Any]:
         "visits": item["visits"],
         "status": item["status"],
         "notes": item["notes"],
+        "requestCount": len(timeline_items),
+        "openRequestCount": open_request_count,
+        "lastRequestAt": _optional_text(timeline_items[0]["createdAt"]) if timeline_items else None,
+        "timeline": timeline_items,
     }
 
 
@@ -1090,7 +1130,15 @@ def _approve_action(action_id: str, approved_by: str, final_message: str | None)
 
 def _list_patients() -> dict[str, Any]:
     items = sorted(_list_patient_items(), key=lambda item: item["name"])
-    return {"patients": [_patient_dto(item) for item in items]}
+    requests_by_patient_id: dict[str, list[dict[str, Any]]] = {}
+    for request in sorted(_list_patient_request_items(), key=lambda item: item["created_at"], reverse=True):
+        patient_id = request["patient_id"]
+        if not patient_id:
+            continue
+        requests_by_patient_id.setdefault(patient_id, []).append(_patient_timeline_item(request))
+    return {
+        "patients": [_patient_dto(item, requests_by_patient_id.get(item["patient_id"], [])) for item in items]
+    }
 
 
 def _list_schedule() -> dict[str, Any]:
@@ -1570,6 +1618,32 @@ def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) ->
 
 def _patient_lookup_by_email() -> dict[str, ClinicPatientsItem]:
     return {item["email"].strip().lower(): item for item in _list_patient_items() if item["email"].strip()}
+
+
+def _patient_item_from_request(item: ClinicPatientRequestsItem) -> ClinicPatientsItem:
+    name = item["patient_name"].strip() or item["patient_email"].strip() or "Unknown patient"
+    note_source = item["source_summary"].strip() or item["request_type"].replace("_", " ")
+    return {
+        "clinic_id": _clinic_id(),
+        "patient_id": item["patient_id"],
+        "name": name,
+        "email": item["patient_email"].strip().lower(),
+        "phone": "",
+        "last_visit": "-",
+        "next_appt": "Pending request",
+        "visits": 0,
+        "status": "new",
+        "notes": f"Created from Gmail request. Latest request: {note_source}",
+    }
+
+
+def _ensure_patient_for_request(item: ClinicPatientRequestsItem) -> None:
+    if not item["patient_id"] or not item["patient_email"]:
+        return
+    existing = get_clinic_patients(_clinic_id(), item["patient_id"])
+    if existing is not None:
+        return
+    put_clinic_patients(_patient_item_from_request(item))
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -2454,9 +2528,10 @@ def _gmail_message_to_patient_request_item(
         return None
 
     sender_name, sender_email = parseaddr(headers.get("from", ""))
-    matched_patient = patient_by_email.get(sender_email.lower()) if sender_email else None
-    patient_name = matched_patient["name"] if matched_patient else sender_name or sender_email or "Unknown sender"
-    patient_id = matched_patient["patient_id"] if matched_patient else ""
+    normalized_sender_email = sender_email.strip().lower()
+    matched_patient = patient_by_email.get(normalized_sender_email) if normalized_sender_email else None
+    patient_name = matched_patient["name"] if matched_patient else _patient_display_name(sender_name, sender_email)
+    patient_id = matched_patient["patient_id"] if matched_patient else (_patient_id_for_email(normalized_sender_email) if normalized_sender_email else "")
     subject = headers.get("subject", "").strip()
     summary = _truncate(subject or message_text or snippet or "New Gmail message", 120)
     source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{message_text}".strip(), 1200)
@@ -2494,7 +2569,7 @@ def _gmail_message_to_patient_request_item(
         "patient_request_id": patient_request_id,
         "patient_id": patient_id,
         "patient_name": patient_name,
-        "patient_email": sender_email,
+        "patient_email": normalized_sender_email,
         "time_label": localized.strftime("%I:%M %p").lstrip("0"),
         "source_summary": summary,
         "source_excerpt": source_message,
@@ -2568,6 +2643,7 @@ def _upsert_gmail_request_candidates(items: list[ClinicPatientRequestsItem]) -> 
     for item in items:
         existing_request = get_clinic_patient_requests(_practice_id(), item["patient_request_id"])
         request_item = _merge_patient_request_candidate(existing_request, item)
+        _ensure_patient_for_request(request_item)
         put_clinic_patient_requests(request_item)
 
         action_item = _patient_request_to_action_item(request_item)

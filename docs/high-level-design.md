@@ -195,6 +195,16 @@ Key:
 Patients are separate from app login users. A patient may have email, phone, and
 other clinical/admin metadata over time.
 
+Current identity behavior:
+
+- Gmail senders are matched to existing patients by normalized email address.
+- If a clinic-relevant Gmail request comes from a new email address, the backend
+  creates a deterministic `patient_id` and writes a new `clinic_patients`
+  record before storing the request/action.
+- The Patients tab timeline is derived from linked `clinic_patient_requests`;
+  the durable request trail stays on the request entity rather than being copied
+  into a separate timeline table.
+
 ### `clinic_practice_members`
 
 Stores app users who belong to a practice.

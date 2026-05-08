@@ -203,6 +203,9 @@ Important UI decisions:
   - `Scan Gmail`
 - Request cards expand to show source email, triage, patient context, and an
   editable draft reply.
+- The `Patients` tab shows linked request history. Gmail scan now creates a
+  deterministic `patient_id` and a patient record for new clinic-relevant
+  senders, then links requests/actions back to that patient.
 - Draft reply text is editable before `Approve and store`.
 - The bottom nav has:
   - `Rounds`

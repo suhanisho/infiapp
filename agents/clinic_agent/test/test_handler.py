@@ -279,6 +279,58 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(handler_module._patient_request_dto(request_item)["triageConfidence"], 0.72)
         json.dumps(handler_module._patient_request_dto(request_item))
 
+    def test_new_gmail_sender_gets_patient_id_and_record(self) -> None:
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0],
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+
+        with (
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
+            patch.object(handler_module, "get_clinic_actions", return_value=None),
+            patch.object(handler_module, "get_clinic_patients", return_value=None),
+            patch.object(handler_module, "put_clinic_patients") as put_patient,
+            patch.object(handler_module, "put_clinic_patient_requests"),
+            patch.object(handler_module, "put_clinic_actions") as put_action,
+        ):
+            actions = handler_module._upsert_gmail_request_candidates([request_item])
+
+        self.assertTrue(request_item["patient_id"].startswith("patient_email_"))
+        self.assertEqual(request_item["patient_email"], "rachel.d@gmail.com")
+        patient_item = put_patient.call_args.args[0]
+        self.assertEqual(patient_item["patient_id"], request_item["patient_id"])
+        self.assertEqual(patient_item["email"], "rachel.d@gmail.com")
+        self.assertEqual(patient_item["status"], "new")
+        self.assertEqual(actions[0]["patient_id"], request_item["patient_id"])
+        self.assertEqual(put_action.call_args.args[0]["patient_id"], request_item["patient_id"])
+
+    def test_list_patients_includes_request_timeline(self) -> None:
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0],
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        patient_item = handler_module._patient_item_from_request(request_item)
+
+        with (
+            patch.object(handler_module, "query_clinic_patients", return_value=[patient_item]),
+            patch.object(handler_module, "query_clinic_patient_requests", return_value=[request_item]),
+        ):
+            body = handler_module._list_patients()
+
+        patient = body["patients"][0]
+        self.assertEqual(patient["requestCount"], 1)
+        self.assertEqual(patient["openRequestCount"], 1)
+        self.assertEqual(patient["timeline"][0]["patientRequestId"], request_item["patient_request_id"])
+        self.assertEqual(patient["timeline"][0]["requestType"], "appointment_request")
+
     def test_urgent_clinical_message_is_triaged_for_doctor_review(self) -> None:
         message = {
             "id": "gmail-message-urgent-1",

@@ -507,6 +507,18 @@ function Schedule({ days }: { days: ScheduleDay[] }) {
   );
 }
 
+function timelineDateLabel(value: string) {
+  if (!value) {
+    return "";
+  }
+  return new Date(value).toLocaleString([], {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+  });
+}
+
 function Patients({ patients }: { patients: Patient[] }) {
   const [query, setQuery] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -536,6 +548,17 @@ function Patients({ patients }: { patients: Patient[] }) {
       <div className="stack-list">
         {filteredPatients.map((patient) => {
           const expanded = expandedId === patient.patientId;
+          const timeline = patient.timeline || [];
+          const openRequestCount = patient.openRequestCount || 0;
+          const requestCount = patient.requestCount || 0;
+          const patientSummary =
+            openRequestCount > 0
+              ? `${openRequestCount} open request${openRequestCount === 1 ? "" : "s"}`
+              : requestCount > 0
+                ? `${requestCount} request${requestCount === 1 ? "" : "s"} in timeline`
+                : patient.visits === 0
+                  ? "No visits yet"
+                  : `${patient.visits} visits · Last: ${patient.lastVisit}`;
           return (
             <article key={patient.patientId} className="patient-card">
               <button
@@ -547,9 +570,7 @@ function Patients({ patients }: { patients: Patient[] }) {
                 <span className={`avatar avatar-${patient.status}`}>{initials(patient.name)}</span>
                 <span className="row-copy">
                   <strong>{patient.name}</strong>
-                  <small>
-                    {patient.visits === 0 ? "No visits yet" : `${patient.visits} visits · Last: ${patient.lastVisit}`}
-                  </small>
+                  <small>{patientSummary}</small>
                 </span>
                 <span className={`status-pill status-${patient.status}`}>{statusLabel(patient.status)}</span>
               </button>
@@ -571,6 +592,23 @@ function Patients({ patients }: { patients: Patient[] }) {
                     </div>
                   </dl>
                   <p>{patient.notes}</p>
+                  {timeline.length > 0 ? (
+                    <div className="patient-timeline">
+                      <span>Request timeline</span>
+                      {timeline.map((entry) => (
+                        <article key={entry.timelineId}>
+                          <strong>{entry.title}</strong>
+                          <small>
+                            {actionTypeLabel(entry.requestType)} · {statusLabel(entry.status)}
+                            {entry.createdAt ? ` · ${timelineDateLabel(entry.createdAt)}` : ""}
+                          </small>
+                          <p>{entry.description}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="audit-note">No patient requests have been linked yet.</p>
+                  )}
                 </div>
               ) : null}
             </article>
@@ -883,8 +921,12 @@ export function ClinicApp({
       if (!response.ok) {
         throw new Error(body.error || "Unable to scan Gmail");
       }
-      const actionData = await loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true");
+      const [actionData, patientData] = await Promise.all([
+        loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
+        loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
+      ]);
       setActions(actionData.actions);
+      setPatients(patientData.patients);
       await refreshIntegrations();
       setTab("actions");
       setNotice(`${body.messagesScanned} Gmail messages scanned; ${body.proposedActions} in-app drafts prepared. Nothing was sent.`);
