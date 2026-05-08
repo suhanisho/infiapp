@@ -300,107 +300,132 @@ const patients = basePatients.map((patient) => {
   };
 });
 
-const scheduleDays = [
-  {
-    dayKey: "Mon 28",
-    dayLabel: "Monday 28 Apr",
+type MockScheduleEvent = {
+  eventId: string;
+  startTime: string;
+  endTime: string;
+  patientName: string;
+  patientId: string | null;
+  appointmentType: string;
+  externalCalendarId: string;
+  externalEventId: string;
+  lastSyncedAt: string;
+  sourceProvider: string;
+  status: string;
+};
+
+const scheduleEventsByDate: Record<string, { dayType: string; events: MockScheduleEvent[] }> = {
+  "2026-05-08": {
     dayType: "private",
     events: [
       {
-        eventId: "2026-04-28-0900",
+        eventId: "2026-05-08-0900",
         startTime: "09:00",
         endTime: "09:45",
         patientName: "Emma Richardson",
         patientId: "p1",
         appointmentType: "Follow-up",
         externalCalendarId: "primary",
-        externalEventId: "gcal-2026-04-28-0900",
+        externalEventId: "gcal-2026-05-08-0900",
         lastSyncedAt: "2026-05-02T00:00:00+00:00",
         sourceProvider: "google_calendar",
-        status: "completed",
+        status: "upcoming",
       },
       {
-        eventId: "2026-04-28-1330",
+        eventId: "2026-05-08-1330",
         startTime: "13:30",
         endTime: "14:00",
         patientName: "Sarah Mitchell",
         patientId: "p3",
         appointmentType: "Follow-up",
         externalCalendarId: "primary",
-        externalEventId: "gcal-2026-04-28-1330",
-        lastSyncedAt: "2026-05-02T00:00:00+00:00",
-        sourceProvider: "google_calendar",
-        status: "in_progress",
-      },
-    ],
-  },
-  {
-    dayKey: "Wed 30",
-    dayLabel: "Wednesday 30 Apr",
-    dayType: "nhs",
-    events: [
-      {
-        eventId: "2026-04-30-0830",
-        startTime: "08:30",
-        endTime: "13:00",
-        patientName: "NHS Clinic - St Mary's",
-        patientId: null,
-        appointmentType: "NHS Duty",
-        externalCalendarId: "primary",
-        externalEventId: "gcal-2026-04-30-0830",
-        lastSyncedAt: "2026-05-02T00:00:00+00:00",
-        sourceProvider: "google_calendar",
-        status: "nhs",
-      },
-      {
-        eventId: "2026-04-30-1400",
-        startTime: "14:00",
-        endTime: "14:45",
-        patientName: "Available",
-        patientId: null,
-        appointmentType: "Open slot",
-        externalCalendarId: "primary",
-        externalEventId: "gcal-2026-04-30-1400",
-        lastSyncedAt: "2026-05-02T00:00:00+00:00",
-        sourceProvider: "google_calendar",
-        status: "open",
-      },
-    ],
-  },
-  {
-    dayKey: "Fri 2",
-    dayLabel: "Friday 2 May",
-    dayType: "private",
-    events: [
-      {
-        eventId: "2026-05-02-1000",
-        startTime: "10:00",
-        endTime: "10:45",
-        patientName: "Available",
-        patientId: null,
-        appointmentType: "Open slot",
-        externalCalendarId: "primary",
-        externalEventId: "gcal-2026-05-02-1000",
-        lastSyncedAt: "2026-05-02T00:00:00+00:00",
-        sourceProvider: "google_calendar",
-        status: "open",
-      },
-      {
-        eventId: "2026-05-02-1100",
-        startTime: "11:00",
-        endTime: "11:30",
-        patientName: "Fatima Ali",
-        patientId: "p8",
-        appointmentType: "Follow-up",
-        externalCalendarId: "primary",
-        externalEventId: "gcal-2026-05-02-1100",
+        externalEventId: "gcal-2026-05-08-1330",
         lastSyncedAt: "2026-05-02T00:00:00+00:00",
         sourceProvider: "google_calendar",
         status: "upcoming",
       },
     ],
   },
-];
+  "2026-05-11": {
+    dayType: "nhs",
+    events: [
+      {
+        eventId: "2026-05-11-0830",
+        startTime: "08:30",
+        endTime: "13:00",
+        patientName: "NHS Clinic - St Mary's",
+        patientId: null,
+        appointmentType: "NHS Duty",
+        externalCalendarId: "primary",
+        externalEventId: "gcal-2026-05-11-0830",
+        lastSyncedAt: "2026-05-02T00:00:00+00:00",
+        sourceProvider: "google_calendar",
+        status: "nhs",
+      },
+      {
+        eventId: "2026-05-11-1400",
+        startTime: "14:00",
+        endTime: "14:45",
+        patientName: "Available",
+        patientId: null,
+        appointmentType: "Open slot",
+        externalCalendarId: "primary",
+        externalEventId: "gcal-2026-05-11-1400",
+        lastSyncedAt: "2026-05-02T00:00:00+00:00",
+        sourceProvider: "google_calendar",
+        status: "open",
+      },
+    ],
+  },
+  "2026-05-15": {
+    dayType: "private",
+    events: [
+      {
+        eventId: "2026-05-15-1000",
+        startTime: "10:00",
+        endTime: "10:45",
+        patientName: "Available",
+        patientId: null,
+        appointmentType: "Open slot",
+        externalCalendarId: "primary",
+        externalEventId: "gcal-2026-05-15-1000",
+        lastSyncedAt: "2026-05-02T00:00:00+00:00",
+        sourceProvider: "google_calendar",
+        status: "open",
+      },
+      {
+        eventId: "2026-05-15-1100",
+        startTime: "11:00",
+        endTime: "11:30",
+        patientName: "Fatima Ali",
+        patientId: "p8",
+        appointmentType: "Follow-up",
+        externalCalendarId: "primary",
+        externalEventId: "gcal-2026-05-15-1100",
+        lastSyncedAt: "2026-05-02T00:00:00+00:00",
+        sourceProvider: "google_calendar",
+        status: "upcoming",
+      },
+    ],
+  },
+};
+
+const scheduleDays = Array.from({ length: 14 }, (_, offset) => {
+  const date = new Date(Date.UTC(2026, 4, 8 + offset, 12));
+  const dayDate = date.toISOString().slice(0, 10);
+  const dayNumber = date.toLocaleDateString("en-GB", { day: "numeric", timeZone: "UTC" });
+  const weekdayShort = date.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "short" });
+  const weekdayLong = date.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long" });
+  const monthShort = date.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+  const schedule = scheduleEventsByDate[dayDate] || { dayType: "private", events: [] };
+  return {
+    dayDate,
+    dayKey: `${weekdayShort} ${dayNumber}`,
+    dayLabel: `${weekdayLong} ${dayNumber} ${monthShort}`,
+    dayType: schedule.dayType,
+    events: schedule.events,
+  };
+});
 
 const settings = {
   availabilityRules: [

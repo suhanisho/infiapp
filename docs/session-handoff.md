@@ -112,6 +112,8 @@ Google Calendar:
 - `sync_google_calendar` refreshes OAuth using the stored refresh token.
 - It reads Google Calendar events for the next 14 days.
 - It maps events into `clinic_schedule`.
+- It returns a rolling 14-day read-only schedule, including empty days, so the
+  Schedule tab can show a complete week and the following week.
 - It does not write to Google Calendar.
 
 Gmail:
@@ -197,6 +199,11 @@ Important UI decisions:
   learn to ignore that metric area.
 - `Rounds` is the daily cockpit: greeting, date, briefing, schedule overview,
   and open actions that need attention.
+- New empty practices see a first-run setup screen for Google connection,
+  Calendar read, and Gmail scan. It disappears once synced workspace data
+  exists or the user opens the empty workspace.
+- `Schedule` shows 7 days by default with previous/next week controls, while
+  remaining read-only.
 - Settings drawer has Google controls:
   - `Reconnect Google`
   - `Read Calendar`

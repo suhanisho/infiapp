@@ -1141,20 +1141,48 @@ def _list_patients() -> dict[str, Any]:
     }
 
 
+def _schedule_day_date(item: ClinicScheduleItem) -> date | None:
+    if item["start_at"]:
+        try:
+            parsed = datetime.fromisoformat(item["start_at"].replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed.astimezone(_clinic_timezone()).date() if parsed.tzinfo else parsed.date()
+    return _parse_schedule_day_label(item["day_label"])
+
+
+def _schedule_day_shell(day_date: date) -> dict[str, Any]:
+    return {
+        "dayDate": day_date.isoformat(),
+        "dayKey": f"{day_date:%a} {day_date.day}",
+        "dayLabel": f"{day_date:%A} {day_date.day} {day_date:%b}",
+        "dayType": "private",
+        "events": [],
+    }
+
+
 def _list_schedule() -> dict[str, Any]:
-    items = sorted(_list_schedule_items(), key=lambda item: (item["sort_order"], item["start_time"]))
-    days_by_key: dict[str, dict[str, Any]] = {}
+    items = sorted(_list_schedule_items(), key=lambda item: (item["start_at"], item["sort_order"], item["start_time"]))
+    today = datetime.now(_clinic_timezone()).date()
+    window_end = today + timedelta(days=CALENDAR_SYNC_DAYS)
+    days_by_date = {
+        (today + timedelta(days=offset)).isoformat(): _schedule_day_shell(today + timedelta(days=offset))
+        for offset in range(CALENDAR_SYNC_DAYS)
+    }
+
     for item in items:
-        day_key = item["day_key"]
-        if day_key not in days_by_key:
-            days_by_key[day_key] = {
-                "dayKey": day_key,
-                "dayLabel": item["day_label"],
-                "dayType": item["day_type"],
-                "events": [],
-            }
-        cast(list[dict[str, Any]], days_by_key[day_key]["events"]).append(_schedule_event_dto(item))
-    return {"days": list(days_by_key.values())}
+        item_date = _schedule_day_date(item)
+        if item_date is None or item_date < today or item_date >= window_end:
+            continue
+        day_key = item_date.isoformat()
+        if day_key not in days_by_date:
+            days_by_date[day_key] = _schedule_day_shell(item_date)
+        if item["day_type"] == "nhs":
+            days_by_date[day_key]["dayType"] = "nhs"
+        cast(list[dict[str, Any]], days_by_date[day_key]["events"]).append(_schedule_event_dto(item))
+
+    return {"days": [days_by_date[key] for key in sorted(days_by_date)]}
 
 
 def _setting_items(setting_id: str, settings: dict[str, ClinicSettingsItem]) -> list[dict[str, Any]]:

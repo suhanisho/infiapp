@@ -241,6 +241,7 @@
       "output": {
         "days": [
           {
+            "dayDate": "String",
             "dayKey": "String",
             "dayLabel": "String",
             "dayType": "String",
@@ -388,6 +389,7 @@
         "appointmentsCached": "Number",
         "days": [
           {
+            "dayDate": "String",
             "dayKey": "String",
             "dayLabel": "String",
             "dayType": "String",

@@ -22,6 +22,8 @@ type Integration = ClinicAgentListIntegrationsOutput["integrations"][number];
 type Tab = "actions" | "schedule" | "patients";
 type ScheduleEvent = ScheduleDay["events"][number];
 
+const SCHEDULE_DAYS_PER_PAGE = 7;
+
 const emptySettings: Settings = {
   appointmentTypes: [],
   availabilityRules: [],
@@ -203,7 +205,32 @@ function activeScheduleEvents(days: ScheduleDay[]) {
   return events;
 }
 
+function scheduleDayId(day: ScheduleDay) {
+  return day.dayDate || day.dayKey;
+}
+
+function localIsoDate(value = new Date()) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function weekRangeLabel(days: ScheduleDay[]) {
+  if (days.length === 0) {
+    return "";
+  }
+  const first = days[0].dayLabel.replace(/^[A-Za-z]+ /, "");
+  const last = days[days.length - 1].dayLabel.replace(/^[A-Za-z]+ /, "");
+  return `${first} - ${last}`;
+}
+
 function scheduleEventsForToday(days: ScheduleDay[]) {
+  const todayIso = localIsoDate();
+  const todayByDate = days.find((day) => day.dayDate === todayIso);
+  if (todayByDate) {
+    return activeScheduleEvents([todayByDate]);
+  }
   const todayLabel = new Date()
     .toLocaleDateString("en-GB", {
       day: "numeric",
@@ -449,14 +476,32 @@ function Rounds({
 }
 
 function Schedule({ days }: { days: ScheduleDay[] }) {
-  const [selectedKey, setSelectedKey] = useState(days[0]?.dayKey || "");
-  const selectedDay = days.find((day) => day.dayKey === selectedKey) || days[0];
+  const [weekStartIndex, setWeekStartIndex] = useState(0);
+  const [selectedKey, setSelectedKey] = useState(days[0] ? scheduleDayId(days[0]) : "");
+  const totalWeeks = Math.max(1, Math.ceil(days.length / SCHEDULE_DAYS_PER_PAGE));
+  const maxWeekStartIndex = Math.max(0, (totalWeeks - 1) * SCHEDULE_DAYS_PER_PAGE);
+  const safeWeekStartIndex = Math.min(weekStartIndex, maxWeekStartIndex);
+  const visibleDays = days.slice(safeWeekStartIndex, safeWeekStartIndex + SCHEDULE_DAYS_PER_PAGE);
+  const selectedDay =
+    visibleDays.find((day) => scheduleDayId(day) === selectedKey) ||
+    days.find((day) => scheduleDayId(day) === selectedKey) ||
+    visibleDays[0] ||
+    days[0];
 
   useEffect(() => {
-    if (!selectedKey && days[0]) {
-      setSelectedKey(days[0].dayKey);
+    if (weekStartIndex > maxWeekStartIndex) {
+      setWeekStartIndex(maxWeekStartIndex);
     }
-  }, [days, selectedKey]);
+  }, [maxWeekStartIndex, weekStartIndex]);
+
+  useEffect(() => {
+    if (visibleDays.length === 0) {
+      return;
+    }
+    if (!visibleDays.some((day) => scheduleDayId(day) === selectedKey)) {
+      setSelectedKey(scheduleDayId(visibleDays[0]));
+    }
+  }, [selectedKey, visibleDays]);
 
   return (
     <section className="screen-panel" aria-labelledby="schedule-title">
@@ -465,13 +510,36 @@ function Schedule({ days }: { days: ScheduleDay[] }) {
         <span className="quiet-badge">Read only</span>
       </div>
 
+      <div className="schedule-week-controls">
+        <button
+          type="button"
+          className="week-nav-button"
+          disabled={safeWeekStartIndex === 0}
+          onClick={() => setWeekStartIndex(Math.max(0, safeWeekStartIndex - SCHEDULE_DAYS_PER_PAGE))}
+        >
+          Previous
+        </button>
+        <div>
+          <span>Week {Math.floor(safeWeekStartIndex / SCHEDULE_DAYS_PER_PAGE) + 1}</span>
+          <strong>{weekRangeLabel(visibleDays)}</strong>
+        </div>
+        <button
+          type="button"
+          className="week-nav-button"
+          disabled={safeWeekStartIndex >= maxWeekStartIndex}
+          onClick={() => setWeekStartIndex(Math.min(maxWeekStartIndex, safeWeekStartIndex + SCHEDULE_DAYS_PER_PAGE))}
+        >
+          Next
+        </button>
+      </div>
+
       <div className="day-tabs" role="tablist" aria-label="Schedule days">
-        {days.map((day) => (
+        {visibleDays.map((day) => (
           <button
             type="button"
-            key={day.dayKey}
-            className={`day-tab ${selectedDay?.dayKey === day.dayKey ? "is-selected" : ""}`}
-            onClick={() => setSelectedKey(day.dayKey)}
+            key={scheduleDayId(day)}
+            className={`day-tab ${selectedDay && scheduleDayId(selectedDay) === scheduleDayId(day) ? "is-selected" : ""}`}
+            onClick={() => setSelectedKey(scheduleDayId(day))}
           >
             <span>{day.dayKey.split(" ")[0]}</span>
             <strong>{day.dayKey.split(" ")[1]}</strong>
@@ -498,6 +566,7 @@ function Schedule({ days }: { days: ScheduleDay[] }) {
                 </div>
               </article>
             ))}
+            {selectedDay.events.length === 0 ? <div className="empty-state">No appointments on this day.</div> : null}
           </div>
         </>
       ) : (
@@ -650,6 +719,102 @@ function connectedIntegrationState(integrations: Integration[]) {
     connectedAt: integration.connectedAt || connectedAt,
     lastError: null,
   }));
+}
+
+function workspaceHasContent(actions: ClinicAction[], patients: Patient[], days: ScheduleDay[], integrations: Integration[]) {
+  const hasOpenOrHistoricWork = actions.length > 0 || patients.length > 0;
+  const hasScheduleEvents = days.some((day) => day.events.length > 0);
+  const hasCompletedRead = integrations.some((integration) => Boolean(integration.lastSyncAt));
+  return hasOpenOrHistoricWork || hasScheduleEvents || hasCompletedRead;
+}
+
+function OnboardingScreen({
+  googleConnected,
+  googleAuthAvailable,
+  mockAuthAvailable,
+  onConnectGoogle,
+  onScanGmail,
+  onSyncCalendar,
+  onSkip,
+  scanningGmail,
+  syncingCalendar,
+}: {
+  googleConnected: boolean;
+  googleAuthAvailable: boolean;
+  mockAuthAvailable: boolean;
+  onConnectGoogle: () => void;
+  onScanGmail: () => Promise<void>;
+  onSyncCalendar: () => Promise<void>;
+  onSkip: () => void;
+  scanningGmail: boolean;
+  syncingCalendar: boolean;
+}) {
+  return (
+    <section className="onboarding-panel" aria-labelledby="onboarding-title">
+      <div className="onboarding-hero">
+        <span className="eyebrow">First run</span>
+        <h1 id="onboarding-title">Set up today&apos;s clinic view</h1>
+        <p>Connect Google, then read Calendar and Gmail to prepare the first Rounds briefing.</p>
+      </div>
+
+      <div className="onboarding-steps">
+        <article>
+          <span className={googleConnected ? "step-dot is-done" : "step-dot"} />
+          <div>
+            <strong>Google Workspace</strong>
+            <small>{googleConnected ? "Connected" : "Not connected"}</small>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!googleAuthAvailable && !mockAuthAvailable}
+            onClick={onConnectGoogle}
+          >
+            {googleConnected ? "Reconnect" : "Connect"}
+          </button>
+        </article>
+
+        <article>
+          <span className="step-dot" />
+          <div>
+            <strong>Calendar</strong>
+            <small>Appointments source of truth</small>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!googleConnected || syncingCalendar}
+            onClick={() => void onSyncCalendar()}
+          >
+            {syncingCalendar ? "Reading..." : "Read"}
+          </button>
+        </article>
+
+        <article>
+          <span className="step-dot" />
+          <div>
+            <strong>Gmail</strong>
+            <small>Patient requests and drafts</small>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!googleConnected || scanningGmail}
+            onClick={() => void onScanGmail()}
+          >
+            {scanningGmail ? "Scanning..." : "Scan"}
+          </button>
+        </article>
+      </div>
+
+      <div className="onboarding-footer">
+        <span>Nothing is sent or changed without approval.</span>
+        <button type="button" className="connect-link" onClick={onSkip}>
+          Open empty workspace
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function SettingsDrawer({
@@ -808,6 +973,7 @@ export function ClinicApp({
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
   const [scanningGmail, setScanningGmail] = useState(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
   useEffect(() => {
     async function loadClinicData() {
@@ -950,6 +1116,10 @@ export function ClinicApp({
     setError("Google OAuth is not configured yet.");
   }
 
+  const googleConnected = integrations.some((integration) => integration.status === "connected");
+  const showOnboarding =
+    !loading && !onboardingDismissed && !workspaceHasContent(actions, patients, days, integrations);
+
   const tabs: { key: Tab; label: string }[] = [
     { key: "actions", label: "Rounds" },
     { key: "schedule", label: "Schedule" },
@@ -990,7 +1160,20 @@ export function ClinicApp({
       {notice ? <div className="notice-banner">{notice}</div> : null}
 
       <div className="app-content">
-        {tab === "actions" ? (
+        {showOnboarding ? (
+          <OnboardingScreen
+            googleConnected={googleConnected}
+            googleAuthAvailable={googleAuthAvailable}
+            mockAuthAvailable={mockAuthAvailable}
+            onConnectGoogle={connectGoogle}
+            onScanGmail={scanGmail}
+            onSyncCalendar={syncGoogleCalendar}
+            onSkip={() => setOnboardingDismissed(true)}
+            scanningGmail={scanningGmail}
+            syncingCalendar={syncingCalendar}
+          />
+        ) : null}
+        {!showOnboarding && tab === "actions" ? (
           <Rounds
             actions={actions}
             days={days}
@@ -999,8 +1182,8 @@ export function ClinicApp({
             approvingId={approvingId}
           />
         ) : null}
-        {tab === "schedule" ? <Schedule days={days} /> : null}
-        {tab === "patients" ? <Patients patients={patients} /> : null}
+        {!showOnboarding && tab === "schedule" ? <Schedule days={days} /> : null}
+        {!showOnboarding && tab === "patients" ? <Patients patients={patients} /> : null}
       </div>
 
       <nav className="bottom-nav" aria-label="Primary">

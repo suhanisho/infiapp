@@ -234,6 +234,9 @@ Stores a local read-only cache of Google Calendar events.
 The app uses this table to understand busy/free time and produce availability
 windows for patient replies.
 
+The schedule API returns a rolling 14-day read-only view, including empty days,
+so the UI can show complete weeks instead of only days that contain events.
+
 The app does not write back to Google Calendar in the MVP.
 
 ### `clinic_integrations`
@@ -348,6 +351,11 @@ Reviewing an action and clicking `Approve and store` only records the edited
 final text and audit state. It does not send email, create Gmail drafts, or
 change Google Calendar.
 
+New empty practices see a first-run onboarding screen that guides the user
+through Google connection, Calendar read, and Gmail scan. The screen disappears
+after synced workspace data exists or the user chooses to open the empty
+workspace.
+
 ## Calendar Flow
 
 ```mermaid
@@ -369,6 +377,9 @@ Current Calendar behavior:
 
 - Reads Google Calendar events for the upcoming sync window.
 - Stores busy events in `clinic_schedule`.
+- Returns 14 calendar days, including empty days.
+- The Schedule tab shows 7 days by default and lets the user move to the next
+  week.
 - Uses the local schedule cache when drafting replies.
 - Does not create, update, delete, or block calendar events.
 

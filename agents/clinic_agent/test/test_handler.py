@@ -220,6 +220,41 @@ class ClinicAgentTest(unittest.TestCase):
         replace_cache.assert_called_once()
         mark_success.assert_called_once()
 
+    def test_list_schedule_returns_two_week_day_window(self) -> None:
+        zone = handler_module._clinic_timezone()
+        today = datetime.now(zone).date()
+        appointment_date = today + timedelta(days=2)
+        start_at = datetime.combine(appointment_date, time(10, 0), tzinfo=zone)
+        end_at = datetime.combine(appointment_date, time(10, 30), tzinfo=zone)
+        schedule_item = {
+            "clinic_id": handler_module.LEGACY_CLINIC_ID,
+            "event_id": "future-event-1",
+            "day_key": f"{appointment_date:%a} {appointment_date.day}",
+            "day_label": f"{appointment_date:%A} {appointment_date.day} {appointment_date:%b}",
+            "day_type": "private",
+            "start_time": "10:00",
+            "end_time": "10:30",
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+            "external_calendar_id": "primary",
+            "external_etag": "etag-1",
+            "external_event_id": "external-1",
+            "last_synced_at": "2026-05-08T10:00:00+01:00",
+            "patient_id": "patient-1",
+            "patient_name": "Future Patient",
+            "source_provider": "google_calendar",
+            "appointment_type": "Follow-up",
+            "status": "upcoming",
+            "sort_order": 1,
+        }
+        with patch.object(handler_module, "query_clinic_schedule", return_value=[schedule_item]):
+            body = handler_module._list_schedule()
+
+        self.assertEqual(len(body["days"]), handler_module.CALENDAR_SYNC_DAYS)
+        self.assertEqual(body["days"][0]["dayDate"], today.isoformat())
+        self.assertEqual(body["days"][2]["dayDate"], appointment_date.isoformat())
+        self.assertEqual(body["days"][2]["events"][0]["patientName"], "Future Patient")
+
     def test_gmail_scan_path_only_prepares_in_app_drafts(self) -> None:
         with (
             patch.object(
