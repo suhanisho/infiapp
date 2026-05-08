@@ -306,10 +306,12 @@ function Rounds({
             <strong>{pendingCount}</strong>
             <small>Action{pendingCount === 1 ? "" : "s"}</small>
           </span>
-          <span className={clinicalReviewCount > 0 ? "" : "is-muted"}>
-            <strong>{clinicalReviewCount}</strong>
-            <small>Review</small>
-          </span>
+          {clinicalReviewCount > 0 ? (
+            <span>
+              <strong>{clinicalReviewCount}</strong>
+              <small>Review</small>
+            </span>
+          ) : null}
         </div>
       </div>
 

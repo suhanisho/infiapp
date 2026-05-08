@@ -185,8 +185,16 @@ Main app:
 Important UI decisions:
 
 - The app is mobile-first and doctor-facing, not a marketing page.
-- The first tab is `Rounds`. It follows the premium dark navy/mint visual
-  direction from `weave_clinic_rounds_redesign.html`.
+- The first tab is `Rounds`. It now follows the warm cream, high-readability
+  visual theme from `weave_clinic_rounds_light_theme.html`, because dark mode
+  was too tiring for the intended doctor audience.
+- Key visual decisions: cream background (`#F7F3E8`), dark teal accents
+  (`#0F6E56` / `#1D9E75`), larger default type, stronger text weights, solid
+  status-pill fills, white briefing/action cards for contrast against the cream
+  page, rounded phone canvas, 1px card borders, and a dark navy serif `S` block
+  as the brand anchor.
+- Quiet zero-review states are hidden in the Rounds briefing so doctors do not
+  learn to ignore that metric area.
 - `Rounds` is the daily cockpit: greeting, date, briefing, schedule overview,
   and open actions that need attention.
 - Settings drawer has Google controls:
@@ -266,7 +274,8 @@ before commits to avoid unrelated churn.
 3. Improve email triage with a real LLM/classifier step while preserving
    deterministic safety guardrails.
 4. Consider a configurable Google Calendar appointment schedule booking link.
-5. Later, add explicit approval-gated actions for:
+5. Consider an XL type-size setting for doctors who prefer 18px body text.
+6. Later, add explicit approval-gated actions for:
    - creating a Gmail draft
    - sending a Gmail draft
    - holding or booking a calendar slot

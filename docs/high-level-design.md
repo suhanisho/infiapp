@@ -300,8 +300,29 @@ Current Gmail behavior:
 ## Rounds
 
 The first app screen is `Rounds`, not a raw inbox. It is the daily cockpit for
-the doctor and uses the premium dark navy/mint design direction from
-`weave_clinic_rounds_redesign.html`.
+the doctor and follows the warm cream, high-readability visual theme from
+`weave_clinic_rounds_light_theme.html`. The light theme is an intentional
+accessibility decision for overworked doctors who may find dark interfaces
+tiring to read.
+
+Current visual principles:
+
+- Use warm cream (`#F7F3E8`) instead of pure white for the full-screen
+  background.
+- Use the light mockup's rounded phone canvas treatment over a warmer tan outer
+  background.
+- Use white for the main working surfaces that need attention, especially the
+  Today Briefing card and open action cards.
+- Use darker teal (`#0F6E56` and `#1D9E75`) for brand/action accents so the
+  mint family still meets contrast expectations on cream.
+- Keep a single dark navy serif `S` logo block as a brand signature, not as the
+  overall color scheme.
+- Use larger default type and medium text weight for body copy, names, section
+  labels, and times.
+- Use solid status-pill backgrounds, such as mint `#DCEFE6` and amber
+  `#FAEEDA`, instead of transparent pastel washes.
+- Keep 1px borders so cards remain visible under bright clinic lighting.
+- Hide quiet zero-review states in the Rounds briefing.
 
 It has two current responsibilities:
 
