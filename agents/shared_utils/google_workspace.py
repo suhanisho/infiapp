@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypedDict
 
 GOOGLE_CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
+GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 GOOGLE_OPENID_SCOPE = "openid"
@@ -152,9 +153,9 @@ class GoogleWorkspaceHttpClient:
             headers={"Authorization": f"Bearer {self.access_token}"},
         )
 
-    def _post_json(self, url: str, payload: Mapping[str, Any]) -> JsonObject:
+    def _post_json(self, url: str, payload: Mapping[str, Any], params: QueryParams | None = None) -> JsonObject:
         return _json_request(
-            url,
+            _url_with_params(url, params or {}),
             method="POST",
             headers={
                 "Authorization": f"Bearer {self.access_token}",
@@ -184,6 +185,16 @@ class GoogleWorkspaceHttpClient:
         )
         items = data.get("items", [])
         return [item for item in items if isinstance(item, dict)]
+
+    def create_calendar_event(
+        self,
+        *,
+        calendar_id: str,
+        event: Mapping[str, Any],
+        send_updates: str = "none",
+    ) -> JsonObject:
+        url = GOOGLE_CALENDAR_EVENTS_URL.format(calendar_id=urllib.parse.quote(calendar_id, safe=""))
+        return self._post_json(url, event, {"sendUpdates": send_updates})
 
     def list_gmail_message_metadata(self, *, query: str, max_results: int = 10) -> list[JsonObject]:
         listing = self._get(
@@ -234,7 +245,7 @@ class GoogleWorkspaceHttpClient:
 
 def required_google_scopes() -> dict[str, list[str]]:
     return {
-        "google_calendar": [GOOGLE_CALENDAR_READONLY_SCOPE],
+        "google_calendar": [GOOGLE_CALENDAR_READONLY_SCOPE, GOOGLE_CALENDAR_EVENTS_SCOPE],
         "gmail": [GMAIL_READONLY_SCOPE, GMAIL_COMPOSE_SCOPE],
         "oauth_identity": [GOOGLE_OPENID_SCOPE, GOOGLE_EMAIL_SCOPE],
     }

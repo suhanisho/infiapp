@@ -42,6 +42,17 @@ lambda_handler = cast(
 class FakeGoogleClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, Any]] = []
+        self.created_calendar_events: list[dict[str, Any]] = []
+        self.calendar_events: list[dict[str, Any]] = [
+            {
+                "id": "calendar-event-1",
+                "summary": "Follow-up with Emma Richardson",
+                "etag": "etag-1",
+                "start": {"dateTime": "2026-05-06T09:00:00+01:00"},
+                "end": {"dateTime": "2026-05-06T09:30:00+01:00"},
+                "status": "confirmed",
+            }
+        ]
 
     def list_calendar_events(
         self,
@@ -52,16 +63,22 @@ class FakeGoogleClient:
         max_results: int = 50,
     ) -> list[dict[str, Any]]:
         _ = (calendar_id, time_min, time_max, max_results)
-        return [
-            {
-                "id": "calendar-event-1",
-                "summary": "Follow-up with Emma Richardson",
-                "etag": "etag-1",
-                "start": {"dateTime": "2026-05-06T09:00:00+01:00"},
-                "end": {"dateTime": "2026-05-06T09:30:00+01:00"},
-                "status": "confirmed",
-            }
-        ]
+        return self.calendar_events
+
+    def create_calendar_event(
+        self,
+        *,
+        calendar_id: str,
+        event: dict[str, Any],
+        send_updates: str = "none",
+    ) -> dict[str, Any]:
+        self.created_calendar_events.append({"calendar_id": calendar_id, "event": event, "send_updates": send_updates})
+        return {
+            "id": "calendar-booked-live-1",
+            "etag": "calendar-booked-etag-1",
+            **event,
+            "status": "confirmed",
+        }
 
     def list_gmail_message_metadata(self, *, query: str, max_results: int = 10) -> list[dict[str, Any]]:
         _ = (query, max_results)
@@ -274,6 +291,119 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIn("Reconnect Google", body["error"])
         self.assertEqual(fake_client.sent_messages, [])
         put_action.assert_not_called()
+
+    def test_approve_send_and_book_calendar_books_event_then_sends_confirmation(self) -> None:
+        fake_client = FakeGoogleClient()
+        fake_client.calendar_events = []
+        zone = handler_module._clinic_timezone()
+        target_date = datetime.now(zone).date() + timedelta(days=7)
+        source_message = f"Thanks, {target_date.day} {target_date:%b} at 4.30pm works for my follow-up."
+        seed_action = {
+            **handler_module.SEED_ACTIONS[0],
+            "status": "needs_approval",
+            "source_provider": "gmail",
+            "source_thread_id": "gmail-thread-live-1",
+            "source_message_id": "gmail-message-live-1",
+            "source_message": source_message,
+            "external_sent_message_id": "",
+            "metadata": {"appointment_type": "Follow-up", "booking_candidate_duration_minutes": 20},
+        }
+        calendar_integration = {
+            **handler_module.SEED_INTEGRATIONS[0],
+            "status": "connected",
+            "account_email": "doctor@example.com",
+            "required_scopes": handler_module.GOOGLE_SCOPES["google_calendar"],
+            "token_secret_id": "secret",
+        }
+        gmail_integration = {
+            **handler_module.SEED_INTEGRATIONS[1],
+            "status": "connected",
+            "account_email": "doctor@example.com",
+            "required_scopes": handler_module.GOOGLE_SCOPES["gmail"],
+            "token_secret_id": "secret",
+        }
+
+        def google_client_for_integration(integration_id: str) -> tuple[dict[str, Any], FakeGoogleClient]:
+            if integration_id == "google_calendar":
+                return calendar_integration, fake_client
+            return gmail_integration, fake_client
+
+        with (
+            patch.object(handler_module, "get_clinic_actions", return_value=seed_action),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
+            patch.object(handler_module, "_google_client_for_integration", side_effect=google_client_for_integration),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+            patch.object(handler_module, "put_clinic_actions") as put_action,
+            patch.object(handler_module, "put_clinic_schedule") as put_schedule,
+        ):
+            response = lambda_handler(
+                {
+                    "action": "approve_send_and_book_calendar",
+                    "actionId": seed_action["action_id"],
+                    "approvedBy": "Dr. Shalini",
+                    "finalMessage": "Confirmed and booked",
+                }
+            )
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["externalWrites"], 2)
+        self.assertEqual(body["calendarEventId"], "calendar-booked-live-1")
+        self.assertEqual(len(fake_client.created_calendar_events), 1)
+        self.assertEqual(fake_client.created_calendar_events[0]["send_updates"], "none")
+        self.assertEqual(len(fake_client.sent_messages), 1)
+        put_schedule.assert_called_once()
+        saved_item = put_action.call_args.args[0]
+        self.assertEqual(saved_item["completion_note"], handler_module.GMAIL_SEND_AND_BOOK_COMPLETION_NOTE)
+        self.assertEqual(saved_item["external_sent_message_id"], "gmail-sent-live-1")
+        self.assertEqual(saved_item["metadata"]["external_calendar_event_id"], "calendar-booked-live-1")
+        self.assertEqual(saved_item["metadata"]["external_action"], "gmail_send_calendar_book")
+
+    def test_approve_send_and_book_calendar_rejects_busy_local_slot_without_external_writes(self) -> None:
+        fake_client = FakeGoogleClient()
+        fake_client.calendar_events = []
+        zone = handler_module._clinic_timezone()
+        target_date = datetime.now(zone).date() + timedelta(days=7)
+        start_at = datetime.combine(target_date, time(16, 30), tzinfo=zone)
+        end_at = start_at + timedelta(minutes=20)
+        seed_action = {
+            **handler_module.SEED_ACTIONS[0],
+            "status": "needs_approval",
+            "source_provider": "gmail",
+            "source_thread_id": "gmail-thread-live-1",
+            "source_message_id": "gmail-message-live-1",
+            "source_message": f"{target_date.day} {target_date:%b} at 4.30pm works for me.",
+            "external_sent_message_id": "",
+            "metadata": {"appointment_type": "Follow-up", "booking_candidate_duration_minutes": 20},
+        }
+
+        with (
+            patch.object(handler_module, "get_clinic_actions", return_value=seed_action),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[(start_at, end_at)]),
+            patch.object(handler_module, "_google_client_for_integration") as google_client,
+            patch.object(handler_module, "put_clinic_actions") as put_action,
+            patch.object(handler_module, "put_clinic_schedule") as put_schedule,
+        ):
+            response = lambda_handler(
+                {
+                    "action": "approve_send_and_book_calendar",
+                    "actionId": seed_action["action_id"],
+                    "approvedBy": "Dr. Shalini",
+                    "finalMessage": "Confirmed and booked",
+                }
+            )
+
+        self.assertEqual(response["statusCode"], 400)
+        body = json.loads(response["body"])
+        self.assertIn("local schedule", body["error"])
+        self.assertEqual(fake_client.sent_messages, [])
+        self.assertEqual(fake_client.created_calendar_events, [])
+        google_client.assert_not_called()
+        put_action.assert_not_called()
+        put_schedule.assert_not_called()
 
     def test_approval_requires_action_id(self) -> None:
         response = lambda_handler({"action": "approve_action"})
@@ -697,11 +827,54 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIn("after your scan", request_item["draft_message"])
         self.assertIn("4:30 PM", request_item["draft_message"])
 
+    def test_exact_patient_slot_after_scan_creates_booking_candidate(self) -> None:
+        zone = handler_module._clinic_timezone()
+        scan_date = datetime.now(zone).date() + timedelta(days=8)
+        body = (
+            f"Hello, my scan is on {scan_date.day} {scan_date:%b} at 3pm. "
+            "4.30pm works for a follow-up with Dr Shalini."
+        )
+        encoded_body = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
+        message = {
+            "id": "gmail-message-selected-slot",
+            "threadId": "gmail-thread-selected-slot",
+            "internalDate": "1778067600000",
+            "snippet": "4.30pm works for a follow-up",
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_body},
+                "headers": [
+                    {"name": "From", "value": "Nina Shah <nina@example.com>"},
+                    {"name": "Subject", "value": "Follow-up appointment"},
+                ],
+            },
+        }
+
+        with (
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+        ):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-07T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        self.assertEqual(request_item["proposed_windows"], [])
+        self.assertIn("is booked for", request_item["draft_message"])
+        self.assertIn("4:30 PM", request_item["draft_message"])
+        self.assertTrue(request_item["request_constraints"]["booking_candidate_available"])
+        start_at = datetime.fromisoformat(request_item["request_constraints"]["booking_candidate_start_at"])
+        self.assertEqual(start_at.hour, 16)
+        self.assertEqual(start_at.minute, 30)
+
     def test_connect_google_workspace_stores_metadata_without_returning_tokens(self) -> None:
         token_response = {
             "access_token": "access-token",
             "refresh_token": "refresh-token",
-            "scope": "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+            "scope": "openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
             "id_token": fake_id_token("doctor@example.com"),
         }
         with (

@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App High-Level Design
 
-Last updated: 2026-05-07 (end of day)
+Last updated: 2026-05-08
 
 This document records the current product and system design for the clinic app.
 It is meant to be readable by a new contributor, a future Codex session, or
@@ -21,8 +21,9 @@ The core idea is:
 
 The MVP is intentionally approval-first. It can scan, summarize, suggest, store
 approval/audit state, and send Gmail replies only through the explicit
-`Approve & send Gmail` path. It does not create Gmail drafts or write to Google
-Calendar.
+`Approve & send Gmail` path. It can also book an exact patient-selected slot in
+Google Calendar only through the explicit `Approve, send & book` path. It does
+not create Gmail drafts.
 
 ## Safety Contract
 
@@ -33,8 +34,12 @@ This is the most important design rule in the system:
 - No calendar event is created, updated, deleted, or blocked without explicit
   user approval.
 - `Approve and store` only records completed state and audit information.
-- `Approve & send Gmail` is the only current external action. It sends the
-  edited Gmail reply after explicit approval and records the sent message id.
+- `Approve & send Gmail` sends the edited Gmail reply after explicit approval
+  and records the sent message id.
+- `Approve, send & book` creates the Google Calendar event for the exact
+  patient-selected slot and sends the edited Gmail confirmation after explicit
+  approval. Calendar invites are not sent; the patient communication remains the
+  Gmail reply.
 - Future external actions must be modeled as separate child actions and must
   require explicit approval.
 
@@ -52,7 +57,7 @@ flowchart LR
     Lambda --> DB["DynamoDB tables"]
     Lambda --> Secrets["AWS Secrets Manager"]
     Lambda --> Gmail["Gmail API read-only"]
-    Lambda --> Calendar["Google Calendar API read-only"]
+    Lambda --> Calendar["Google Calendar API read + approved event create"]
 
     Auth --> GoogleOAuth["Google OAuth app"]
     GoogleOAuth --> Web
@@ -231,7 +236,7 @@ owner of their own practice workspace.
 
 ### `clinic_schedule`
 
-Stores a local read-only cache of Google Calendar events.
+Stores a local cache of Google Calendar events.
 
 The app uses this table to understand busy/free time and produce availability
 windows for patient replies.
@@ -239,7 +244,9 @@ windows for patient replies.
 The schedule API returns a rolling 14-day read-only view, including empty days,
 so the UI can show complete weeks instead of only days that contain events.
 
-The app does not write back to Google Calendar in the MVP.
+The app writes to Google Calendar only through explicit approval actions. The
+current write path creates a booked appointment after the doctor clicks
+`Approve, send & book`.
 
 ### `clinic_integrations`
 
@@ -353,6 +360,11 @@ Reviewing an action and clicking `Approve and store` only records the edited
 final text and audit state. It does not send email, create Gmail drafts, or
 change Google Calendar.
 
+When a Gmail request contains an exact patient-selected date and time, the card
+can also show `Approve, send & book`. That path verifies the slot against
+Google Calendar, creates the Calendar event, sends the edited Gmail
+confirmation, and records both external IDs for audit.
+
 New empty practices see a first-run onboarding screen that guides the user
 through Google connection, Calendar read, and Gmail scan. The screen disappears
 after synced workspace data exists or the user chooses to open the empty
@@ -383,7 +395,9 @@ Current Calendar behavior:
 - The Schedule tab shows 7 days by default and lets the user move to the next
   week.
 - Uses the local schedule cache when drafting replies.
-- Does not create, update, delete, or block calendar events.
+- Creates a Calendar event only when the doctor clicks `Approve, send & book`
+  for a Gmail-sourced action with an exact patient-selected slot.
+- Does not update, delete, or block calendar events in the background.
 
 ## Availability Proposal Design
 
@@ -444,6 +458,7 @@ sequenceDiagram
     participant Lambda as clinic_agent Lambda
     participant DB as DynamoDB
     participant Gmail as Gmail API
+    participant Calendar as Google Calendar API
 
     User->>Web: Review request and edit draft
     User->>Web: Click "Approve and store"
@@ -457,6 +472,13 @@ sequenceDiagram
     Lambda->>Gmail: Send edited reply in source thread
     Lambda->>DB: Store sent Gmail message id and completion audit
     Lambda->>Web: Return updated state
+
+    User->>Web: Or click "Approve, send & book"
+    Web->>Lambda: approve_send_and_book_calendar
+    Lambda->>Calendar: Verify free slot and create Calendar event
+    Lambda->>Gmail: Send edited confirmation in source thread
+    Lambda->>DB: Store Calendar event id, sent Gmail id, and audit state
+    Lambda->>Web: Return updated state
 ```
 
 Current approval behavior:
@@ -468,13 +490,17 @@ Current approval behavior:
 - For Gmail-sourced actions only, `approve_and_send_gmail` sends the edited
   message through Gmail after the doctor clicks the send-specific approval
   button, then records the Gmail sent message id on the action.
+- For Gmail-sourced actions with an exact patient-selected slot,
+  `approve_send_and_book_calendar` creates the Google Calendar event and sends
+  the edited Gmail confirmation after the doctor clicks the booking-specific
+  approval button.
 
 Current approval does not:
 
 - create a Gmail draft
-- create or update a calendar event
+- update, delete, or block existing calendar events
 
-Email sending is deliberately isolated to the explicit Gmail send approval path.
+Email and Calendar writes are deliberately isolated to explicit approval paths.
 
 ## Authentication And Google OAuth
 
@@ -494,12 +520,17 @@ Current Google scopes:
 - `openid`
 - `email`
 - `https://www.googleapis.com/auth/calendar.events.readonly`
+- `https://www.googleapis.com/auth/calendar.events`
 - `https://www.googleapis.com/auth/gmail.readonly`
 - `https://www.googleapis.com/auth/gmail.compose`
 
 `gmail.compose` is present because approve-and-send is now implemented as a
 separate explicit approval action. Existing users must reconnect Google to grant
 the new scope before sending.
+
+`calendar.events` is present because exact-slot booking is now implemented as a
+separate explicit approval action. Existing users must reconnect Google to
+grant the new scope before booking.
 
 ## Production And Mock Boundaries
 
@@ -552,7 +583,7 @@ Future approval-gated actions:
 
 - Create Gmail draft.
 - Hold calendar slot.
-- Book calendar appointment.
+- Reschedule or cancel an existing calendar appointment.
 - Ask patient for missing information.
 - Mark request for follow-up.
 
@@ -569,7 +600,7 @@ The current MVP does not:
 
 - create Gmail drafts
 - label, archive, or delete Gmail threads
-- create or edit Google Calendar events
+- update, delete, or silently hold Google Calendar events
 - auto-book appointments
 - make medical decisions
 - replace the doctor review step

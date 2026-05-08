@@ -5,6 +5,7 @@ import { signIn, signOut } from "next-auth/react";
 import type {
   ClinicAgentApproveActionOutput,
   ClinicAgentApproveAndSendGmailOutput,
+  ClinicAgentApproveSendAndBookCalendarOutput,
   ClinicAgentListActionsOutput,
   ClinicAgentListIntegrationsOutput,
   ClinicAgentListPatientsOutput,
@@ -124,6 +125,11 @@ function metadataString(action: ClinicAction, key: string, fallback = "") {
 
 function metadataBoolean(action: ClinicAction, key: string) {
   return metadataValue(action, key) === true;
+}
+
+function metadataIsFalse(action: ClinicAction, key: string) {
+  const value = metadataValue(action, key);
+  return value === false || value === "false";
 }
 
 function metadataRecord(action: ClinicAction, key: string) {
@@ -281,16 +287,20 @@ function Rounds({
   days,
   loading,
   onApprove,
+  onBook,
   onSend,
   approvingId,
+  bookingId,
   sendingId,
 }: {
   actions: ClinicAction[];
   days: ScheduleDay[];
   loading: boolean;
   onApprove: (action: ClinicAction, finalMessage: string) => Promise<void>;
+  onBook: (action: ClinicAction, finalMessage: string) => Promise<void>;
   onSend: (action: ClinicAction, finalMessage: string) => Promise<void>;
   approvingId: string | null;
+  bookingId: string | null;
   sendingId: string | null;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -383,6 +393,14 @@ function Rounds({
           const suggestedNextAction = metadataString(action, "suggested_next_action");
           const emotionalTone = metadataString(action, "patient_emotional_tone", "neutral");
           const constraintSummary = requestConstraintSummary(action);
+          const bookingLabel = metadataString(action, "booking_candidate_label");
+          const bookingUnavailableReason = metadataString(action, "booking_candidate_unavailable_reason");
+          const canBookCalendar =
+            action.sourceProvider === "gmail" &&
+            Boolean(metadataString(action, "booking_candidate_start_at")) &&
+            !metadataIsFalse(action, "booking_candidate_available");
+          const actionBusy =
+            approvingId === action.actionId || sendingId === action.actionId || bookingId === action.actionId;
           return (
             <article key={action.actionId} className={`action-card priority-${action.priority}`}>
               <button
@@ -430,6 +448,16 @@ function Rounds({
                     </div>
                   ) : null}
 
+                  {bookingLabel ? (
+                    <div className="detail-block">
+                      <span>Proposed booking</span>
+                      <p>
+                        {bookingLabel}
+                        {bookingUnavailableReason ? ` · ${bookingUnavailableReason}` : ""}
+                      </p>
+                    </div>
+                  ) : null}
+
                   {action.sourceMessage ? (
                     <div className="detail-block">
                       <span>Source</span>
@@ -456,12 +484,22 @@ function Rounds({
 
                   {action.draftMessage ? (
                     <div className="action-controls">
-                      {action.sourceProvider === "gmail" ? (
+                      {canBookCalendar ? (
                         <button
                           type="button"
                           className="primary-button"
+                          onClick={() => void onBook(action, draftValue)}
+                          disabled={actionBusy}
+                        >
+                          {bookingId === action.actionId ? "Booking..." : "Approve, send & book"}
+                        </button>
+                      ) : null}
+                      {action.sourceProvider === "gmail" ? (
+                        <button
+                          type="button"
+                          className={canBookCalendar ? "secondary-button" : "primary-button"}
                           onClick={() => void onSend(action, draftValue)}
-                          disabled={sendingId === action.actionId || approvingId === action.actionId}
+                          disabled={actionBusy}
                         >
                           {sendingId === action.actionId ? "Sending..." : "Approve & send Gmail"}
                         </button>
@@ -470,7 +508,7 @@ function Rounds({
                         type="button"
                         className={action.sourceProvider === "gmail" ? "secondary-button" : "primary-button"}
                         onClick={() => void onApprove(action, draftValue)}
-                        disabled={approvingId === action.actionId || sendingId === action.actionId}
+                        disabled={actionBusy}
                       >
                         {approvingId === action.actionId ? "Saving..." : "Approve and store"}
                       </button>
@@ -986,6 +1024,7 @@ export function ClinicApp({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [bookingId, setBookingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
   const [scanningGmail, setScanningGmail] = useState(false);
@@ -1027,11 +1066,11 @@ export function ClinicApp({
           const connected = integrationData.integrations.some((integration) => integration.status === "connected");
           setIntegrations(integrationData.integrations);
           if (connected) {
-            setNotice("Google connected. Gmail sends only happen after you approve a specific reply.");
+            setNotice("Google connected. Gmail and calendar updates only happen after you approve a specific action.");
           } else {
-          setError(
-            "Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.",
-          );
+            setError(
+              "Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.",
+            );
           }
         } catch (refreshError) {
           setError(refreshError instanceof Error ? refreshError.message : "Unable to check Google connection");
@@ -1099,6 +1138,47 @@ export function ClinicApp({
     }
   }
 
+  async function approveSendAndBookCalendar(action: ClinicAction, finalMessage: string) {
+    const messageToSend = finalMessage.trim() || action.draftMessage || action.sourceSummary;
+    const bookingLabel = metadataString(action, "booking_candidate_label", "the selected appointment slot");
+    const confirmed = window.confirm(
+      `Book ${bookingLabel} in Google Calendar and send this edited Gmail confirmation now?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBookingId(action.actionId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`/api/clinic/actions/${action.actionId}/book`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          approvedBy: "Dr. Shalini",
+          finalMessage: messageToSend,
+        }),
+      });
+      const body = (await response.json()) as ClinicAgentApproveSendAndBookCalendarOutput & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Unable to book appointment");
+      }
+      setActions((current) => current.map((item) => (item.actionId === body.action.actionId ? body.action : item)));
+      const [scheduleData, patientData] = await Promise.all([
+        loadJson<ClinicAgentListScheduleOutput>("/api/clinic/schedule"),
+        loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
+      ]);
+      setDays(scheduleData.days);
+      setPatients(patientData.patients);
+      setNotice("Appointment booked in Google Calendar and Gmail confirmation sent after your approval.");
+    } catch (bookError) {
+      setError(bookError instanceof Error ? bookError.message : "Unable to book appointment");
+    } finally {
+      setBookingId(null);
+    }
+  }
+
   async function refreshIntegrations() {
     const integrationData = await loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations");
     setIntegrations(integrationData.integrations);
@@ -1158,7 +1238,7 @@ export function ClinicApp({
     }
     if (mockAuthAvailable) {
       setIntegrations((current) => connectedIntegrationState(current));
-      setNotice("Google connected. Gmail sends only happen after you approve a specific reply.");
+      setNotice("Google connected. Gmail and calendar updates only happen after you approve a specific action.");
       return;
     }
     setError("Google OAuth is not configured yet.");
@@ -1227,8 +1307,10 @@ export function ClinicApp({
             days={days}
             loading={loading}
             onApprove={approveAction}
+            onBook={approveSendAndBookCalendar}
             onSend={approveAndSendGmail}
             approvingId={approvingId}
+            bookingId={bookingId}
             sendingId={sendingId}
           />
         ) : null}

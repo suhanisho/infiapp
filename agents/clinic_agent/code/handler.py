@@ -59,6 +59,9 @@ _CURRENT_PRACTICE_ID: ContextVar[str] = ContextVar("clinic_agent_practice_id", d
 SEED_UPDATED_AT = "2026-05-02T00:00:00+00:00"
 COMPLETION_NOTE = "Doctor approved and stored this action. No external email or calendar action was taken by the MVP."
 GMAIL_SEND_COMPLETION_NOTE = "Doctor explicitly approved and Gmail sent this message."
+GMAIL_SEND_AND_BOOK_COMPLETION_NOTE = (
+    "Doctor explicitly approved, Gmail sent this message, and Google Calendar was updated."
+)
 DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = (
@@ -293,6 +296,24 @@ ANXIOUS_TONE_TERMS = (
     "asap",
 )
 FOLLOW_UP_TERMS = ("follow-up", "follow up", "review", "next steps")
+BOOKING_SELECTION_TERMS = (
+    "can do",
+    "could do",
+    "works",
+    "work for me",
+    "suits",
+    "prefer",
+    "preferred",
+    "available",
+    "free",
+    "slot",
+    "appointment",
+    "consultation",
+    "meet",
+    "see dr",
+    "see doctor",
+    "see the doctor",
+)
 DIRECT_PATIENT_REQUEST_PATTERN = re.compile(
     r"\b(i|i'm|i’d|i'd|my|me|could|can|would|please|available|prefer|need|want)\b",
     flags=re.IGNORECASE,
@@ -322,6 +343,31 @@ class TriageResult(TypedDict):
     triage_confidence: Decimal
     triage_reason: str
     action_priority: str
+
+
+class DateMention(TypedDict):
+    value: date
+    start: int
+    end: int
+
+
+class TimeMention(TypedDict):
+    value: time
+    start: int
+    end: int
+
+
+class BookingCandidate(TypedDict):
+    start_at: datetime
+    end_at: datetime
+    label: str
+    available: bool
+    reason: str
+
+
+class SentGmailReply(TypedDict):
+    sent_message_id: str
+    recipient: str
 
 
 def _practice_id() -> str:
@@ -783,7 +829,7 @@ SEED_INTEGRATIONS: list[ClinicIntegrationsItem] = [
         "calendar_sync_token": "",
         "gmail_history_id": "",
         "required_scopes": GOOGLE_SCOPES["google_calendar"],
-        "write_mode": "read_only_source_of_truth",
+        "write_mode": "read_source_book_after_approval",
         "token_secret_id": "",
         "last_sync_at": "",
         "last_error": "",
@@ -1189,6 +1235,40 @@ def _gmail_source_headers(client: GoogleWorkspaceHttpClient, action: ClinicActio
     return _gmail_headers(client.get_gmail_message_metadata(source_message_id))
 
 
+def _send_gmail_reply_for_action(
+    *,
+    item: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+    final_text: str,
+) -> SentGmailReply:
+    integration, client = _google_client_for_integration("gmail")
+    required_send_scopes = GOOGLE_SCOPES["gmail"]
+    if not _integration_has_scopes(integration, required_send_scopes):
+        raise RuntimeError("Reconnect Google to grant Gmail send permission before sending.")
+
+    headers = _gmail_source_headers(client, item)
+    recipient = _gmail_reply_recipient(action=item, patient_request=patient_request, headers=headers)
+    if not recipient:
+        raise RuntimeError("Could not determine a patient email address for this Gmail reply.")
+
+    subject = headers.get("subject", "")
+    if not subject and patient_request is not None:
+        subject = patient_request["source_subject"]
+    raw_reply = _gmail_raw_reply(
+        account_email=integration["account_email"],
+        recipient=recipient,
+        subject=subject or item["source_summary"],
+        body=final_text,
+        original_message_id=headers.get("message-id", ""),
+        original_references=headers.get("references", ""),
+    )
+    send_response = client.send_gmail_message(raw_message=raw_reply, thread_id=item["source_thread_id"] or None)
+    sent_message_id = send_response.get("id")
+    if not isinstance(sent_message_id, str) or not sent_message_id:
+        raise RuntimeError("Gmail did not return a sent message id.")
+    return {"sent_message_id": sent_message_id, "recipient": recipient}
+
+
 def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str | None) -> dict[str, Any]:
     item = _find_action(action_id)
     if item is None:
@@ -1211,37 +1291,13 @@ def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str
         else None
     )
 
-    integration, client = _google_client_for_integration("gmail")
-    required_send_scopes = GOOGLE_SCOPES["gmail"]
-    if not _integration_has_scopes(integration, required_send_scopes):
-        return {"error": "Reconnect Google to grant Gmail send permission before sending."}
-
-    headers = _gmail_source_headers(client, item)
-    recipient = _gmail_reply_recipient(action=item, patient_request=patient_request, headers=headers)
-    if not recipient:
-        return {"error": "Could not determine a patient email address for this Gmail reply."}
-
-    subject = headers.get("subject", "")
-    if not subject and patient_request is not None:
-        subject = patient_request["source_subject"]
-    raw_reply = _gmail_raw_reply(
-        account_email=integration["account_email"],
-        recipient=recipient,
-        subject=subject or item["source_summary"],
-        body=final_text,
-        original_message_id=headers.get("message-id", ""),
-        original_references=headers.get("references", ""),
-    )
-    send_response = client.send_gmail_message(raw_message=raw_reply, thread_id=item["source_thread_id"] or None)
-    sent_message_id = send_response.get("id")
-    if not isinstance(sent_message_id, str) or not sent_message_id:
-        raise RuntimeError("Gmail did not return a sent message id.")
+    sent_reply = _send_gmail_reply_for_action(item=item, patient_request=patient_request, final_text=final_text)
 
     now = _now()
     updated_metadata = {
         **item.get("metadata", {}),
         "external_action": "gmail_send",
-        "sent_to": recipient,
+        "sent_to": sent_reply["recipient"],
     }
     updated = cast(
         ClinicActionsItem,
@@ -1252,7 +1308,7 @@ def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str
             "approved_by": approved_by,
             "completed_at": now,
             "completion_note": GMAIL_SEND_COMPLETION_NOTE,
-            "external_sent_message_id": sent_message_id,
+            "external_sent_message_id": sent_reply["sent_message_id"],
             "final_message": final_text,
             "metadata": updated_metadata,
             "updated_at": now,
@@ -1279,6 +1335,288 @@ def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str
         "action": _action_dto(updated),
         "externalWrites": 1,
         "message": "email sent via Gmail after explicit approval",
+    }
+
+
+def _patient_request_for_action(item: ClinicActionsItem) -> ClinicPatientRequestsItem | None:
+    patient_request_id = item.get("patient_request_id", "")
+    return get_clinic_patient_requests(_practice_id(), patient_request_id) if patient_request_id else None
+
+
+def _booking_candidate_for_action(
+    item: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+) -> BookingCandidate | None:
+    metadata = item.get("metadata", {})
+    start_value = metadata.get("booking_candidate_start_at")
+    duration_value = metadata.get("booking_candidate_duration_minutes")
+    appointment_kind = str(metadata.get("appointment_type") or item["action_type"] or "Appointment")
+    duration_minutes = int(duration_value) if isinstance(duration_value, (int, float)) and duration_value > 0 else 0
+    if patient_request is not None:
+        appointment_kind = patient_request["appointment_type"] or appointment_kind
+        duration_minutes = int(patient_request["duration_minutes"])
+    if duration_minutes <= 0:
+        duration_minutes = 30
+
+    if isinstance(start_value, str) and start_value:
+        start_at = _parse_datetime(start_value)
+        if start_at is not None:
+            end_value = metadata.get("booking_candidate_end_at")
+            end_at = _parse_datetime(end_value) if isinstance(end_value, str) else None
+            if end_at is None or end_at <= start_at:
+                end_at = start_at + timedelta(minutes=duration_minutes)
+            available, reason = _local_booking_slot_is_available(start_at, end_at)
+            return {
+                "start_at": start_at,
+                "end_at": end_at,
+                "label": _booking_label(start_at, end_at, appointment_kind, duration_minutes),
+                "available": available,
+                "reason": reason,
+            }
+
+    source_text = " ".join(
+        part
+        for part in (
+            item.get("source_summary", ""),
+            item.get("source_message", ""),
+            patient_request["source_excerpt"] if patient_request is not None else "",
+        )
+        if part
+    )
+    return _booking_candidate_from_text(source_text, appointment_kind, duration_minutes)
+
+
+def _clinic_timezone_name() -> str:
+    zone_name = os.environ.get("CLINIC_TIMEZONE", DEFAULT_CLINIC_TIMEZONE).strip() or DEFAULT_CLINIC_TIMEZONE
+    try:
+        ZoneInfo(zone_name)
+        return zone_name
+    except ZoneInfoNotFoundError:
+        return "UTC"
+
+
+def _calendar_event_summary(
+    *,
+    patient_name: str,
+    appointment_type: str,
+) -> str:
+    normalized_patient = patient_name.strip() or "Patient"
+    normalized_type = appointment_type.strip() or "Appointment"
+    return f"{normalized_type} - {normalized_patient}"
+
+
+def _calendar_event_payload(
+    *,
+    action: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+    candidate: BookingCandidate,
+) -> dict[str, Any]:
+    appointment_type = (
+        patient_request["appointment_type"]
+        if patient_request is not None and patient_request["appointment_type"]
+        else str(action.get("metadata", {}).get("appointment_type") or action["action_type"] or "Appointment")
+    )
+    patient_name = action["patient_name"] or (patient_request["patient_name"] if patient_request is not None else "")
+    patient_email = patient_request["patient_email"] if patient_request is not None else ""
+    description_lines = [
+        "Booked by the clinic assistant after explicit doctor approval.",
+        f"Patient request ID: {action.get('patient_request_id', '')}",
+    ]
+    if patient_email:
+        description_lines.append(f"Patient email: {patient_email}")
+    if action["source_message_id"]:
+        description_lines.append(f"Source Gmail message ID: {action['source_message_id']}")
+    return {
+        "summary": _calendar_event_summary(patient_name=patient_name, appointment_type=appointment_type),
+        "description": "\n".join(description_lines),
+        "start": {
+            "dateTime": candidate["start_at"].isoformat(),
+            "timeZone": _clinic_timezone_name(),
+        },
+        "end": {
+            "dateTime": candidate["end_at"].isoformat(),
+            "timeZone": _clinic_timezone_name(),
+        },
+        "reminders": {"useDefault": True},
+    }
+
+
+def _schedule_item_for_booked_event(
+    *,
+    event: dict[str, Any],
+    calendar_id: str,
+    action: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+    candidate: BookingCandidate,
+    synced_at: str,
+) -> ClinicScheduleItem:
+    external_event_id = event.get("id")
+    external_event_id = external_event_id if isinstance(external_event_id, str) and external_event_id else candidate["start_at"].isoformat()
+    raw_etag = event.get("etag")
+    appointment_type = (
+        patient_request["appointment_type"]
+        if patient_request is not None and patient_request["appointment_type"]
+        else str(action.get("metadata", {}).get("appointment_type") or action["action_type"] or "Appointment")
+    )
+    patient_name = action["patient_name"] or (patient_request["patient_name"] if patient_request is not None else "Patient")
+    return {
+        "clinic_id": _clinic_id(),
+        "event_id": f"gcal-{_safe_external_fragment(external_event_id)}",
+        "day_key": f"{candidate['start_at']:%a} {candidate['start_at'].day}",
+        "day_label": f"{candidate['start_at']:%A} {candidate['start_at'].day} {candidate['start_at']:%b}",
+        "day_type": "private",
+        "start_time": candidate["start_at"].strftime("%H:%M"),
+        "end_time": candidate["end_at"].strftime("%H:%M"),
+        "start_at": candidate["start_at"].isoformat(),
+        "end_at": candidate["end_at"].isoformat(),
+        "external_calendar_id": calendar_id,
+        "external_etag": raw_etag if isinstance(raw_etag, str) else "",
+        "external_event_id": external_event_id,
+        "last_synced_at": synced_at,
+        "patient_id": action["patient_id"],
+        "patient_name": patient_name,
+        "source_provider": "google_calendar",
+        "appointment_type": appointment_type,
+        "status": "upcoming",
+        "sort_order": int(candidate["start_at"].strftime("%H%M")),
+    }
+
+
+def _book_google_calendar_event_for_action(
+    *,
+    item: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+    candidate: BookingCandidate,
+) -> tuple[str, int]:
+    metadata = item.get("metadata", {})
+    existing_event_id = metadata.get("external_calendar_event_id")
+    if isinstance(existing_event_id, str) and existing_event_id:
+        return existing_event_id, 0
+
+    calendar_integration, calendar_client = _google_client_for_integration("google_calendar")
+    required_calendar_scopes = GOOGLE_SCOPES["google_calendar"]
+    if not _integration_has_scopes(calendar_integration, required_calendar_scopes):
+        raise RuntimeError("Reconnect Google to grant Calendar booking permission before booking.")
+
+    local_available, local_reason = _local_booking_slot_is_available(candidate["start_at"], candidate["end_at"])
+    if not local_available:
+        raise RuntimeError(local_reason or "The proposed slot is not available.")
+
+    calendar_id = calendar_integration["calendar_id"] or "primary"
+    google_available, google_reason = _google_calendar_slot_is_available(
+        client=calendar_client,
+        calendar_id=calendar_id,
+        start_at=candidate["start_at"],
+        end_at=candidate["end_at"],
+    )
+    if not google_available:
+        raise RuntimeError(google_reason or "Google Calendar shows that slot as unavailable.")
+
+    event = calendar_client.create_calendar_event(
+        calendar_id=calendar_id,
+        event=_calendar_event_payload(action=item, patient_request=patient_request, candidate=candidate),
+        send_updates="none",
+    )
+    event_id = event.get("id")
+    if not isinstance(event_id, str) or not event_id:
+        raise RuntimeError("Google Calendar did not return a calendar event id.")
+
+    synced_at = _now()
+    put_clinic_schedule(
+        _schedule_item_for_booked_event(
+            event=event,
+            calendar_id=calendar_id,
+            action=item,
+            patient_request=patient_request,
+            candidate=candidate,
+            synced_at=synced_at,
+        )
+    )
+    return event_id, 1
+
+
+def _approve_send_and_book_calendar(action_id: str, approved_by: str, final_message: str | None) -> dict[str, Any]:
+    item = _find_action(action_id)
+    if item is None:
+        return {"error": f"action not found: {action_id}"}
+    if item["source_provider"] != "gmail":
+        return {"error": "only Gmail-sourced actions can book and send a confirmation"}
+    if item["status"] == "completed":
+        return {"error": "action is already completed"}
+    if item["external_sent_message_id"]:
+        return {"error": "this action already has a Gmail sent message id"}
+
+    final_text = (final_message or item["draft_message"] or item["source_summary"]).strip()
+    if not final_text:
+        return {"error": "finalMessage is required before sending"}
+
+    patient_request = _patient_request_for_action(item)
+    candidate = _booking_candidate_for_action(item, patient_request)
+    if candidate is None:
+        return {"error": "No exact appointment date and time was found in the patient request."}
+    if not candidate["available"]:
+        return {"error": candidate["reason"] or "The proposed slot is not available."}
+
+    calendar_event_id, calendar_writes = _book_google_calendar_event_for_action(
+        item=item,
+        patient_request=patient_request,
+        candidate=candidate,
+    )
+    interim_metadata = {
+        **item.get("metadata", {}),
+        "booking_candidate_start_at": candidate["start_at"].isoformat(),
+        "booking_candidate_end_at": candidate["end_at"].isoformat(),
+        "booking_candidate_label": candidate["label"],
+        "booking_candidate_available": True,
+        "external_calendar_event_id": calendar_event_id,
+    }
+    item = cast(ClinicActionsItem, {**item, "metadata": interim_metadata, "updated_at": _now()})
+    put_clinic_actions(item)
+
+    sent_reply = _send_gmail_reply_for_action(item=item, patient_request=patient_request, final_text=final_text)
+    now = _now()
+    updated_metadata = {
+        **interim_metadata,
+        "external_action": "gmail_send_calendar_book",
+        "sent_to": sent_reply["recipient"],
+    }
+    updated = cast(
+        ClinicActionsItem,
+        {
+            **item,
+            "status": "completed",
+            "approved_at": now,
+            "approved_by": approved_by,
+            "completed_at": now,
+            "completion_note": GMAIL_SEND_AND_BOOK_COMPLETION_NOTE,
+            "external_sent_message_id": sent_reply["sent_message_id"],
+            "final_message": final_text,
+            "metadata": updated_metadata,
+            "updated_at": now,
+        },
+    )
+    put_clinic_actions(updated)
+    if patient_request is not None:
+        put_clinic_patient_requests(
+            cast(
+                ClinicPatientRequestsItem,
+                {
+                    **patient_request,
+                    "status": "completed",
+                    "approved_at": now,
+                    "approved_by": approved_by,
+                    "completed_at": now,
+                    "completion_note": GMAIL_SEND_AND_BOOK_COMPLETION_NOTE,
+                    "final_message": final_text,
+                    "updated_at": now,
+                },
+            )
+        )
+    return {
+        "action": _action_dto(updated),
+        "calendarEventId": calendar_event_id,
+        "externalWrites": calendar_writes + 1,
+        "message": "appointment booked in Google Calendar and Gmail confirmation sent after explicit approval",
     }
 
 
@@ -1363,7 +1701,7 @@ def _list_integrations() -> dict[str, Any]:
     return {
         "integrations": [_integration_dto(item) for item in _list_integration_items()],
         "safety": {
-            "calendarWrites": "disabled",
+            "calendarWrites": "requires_explicit_approval",
             "gmailSends": "requires_explicit_approval",
             "tokenStorage": "external_secret_store",
         },
@@ -1442,7 +1780,7 @@ def _connected_integration(
         "calendar_sync_token": "",
         "gmail_history_id": "",
         "required_scopes": scopes,
-        "write_mode": "read_only_source_of_truth"
+        "write_mode": "read_source_book_after_approval"
         if integration_id == "google_calendar"
         else "read_inbox_send_after_approval",
         "token_secret_id": token_secret_id,
@@ -2189,11 +2527,11 @@ def _future_date_for_day(day: int, today: date) -> date | None:
     return candidate
 
 
-def _date_mentions(text: str, today: date) -> list[date]:
-    mentions: list[date] = []
+def _date_mentions_with_spans(text: str, today: date) -> list[DateMention]:
+    mentions: list[DateMention] = []
     day_month_pattern = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({MONTH_PATTERN})\b")
     month_day_pattern = re.compile(rf"\b({MONTH_PATTERN})\s+(\d{{1,2}})(?:st|nd|rd|th)?\b")
-    bare_day_pattern = re.compile(r"\b(?:on|for|scheduled for)\s+(\d{1,2})(?:st|nd|rd|th)?\b")
+    bare_day_pattern = re.compile(r"\b(?:on|for|scheduled for|the)\s+(\d{1,2})(?:st|nd|rd|th)?\b")
 
     for match in day_month_pattern.finditer(text):
         month = _month_number(match.group(2))
@@ -2201,7 +2539,7 @@ def _date_mentions(text: str, today: date) -> list[date]:
             continue
         candidate = _future_date_for_day_month(int(match.group(1)), month, today)
         if candidate is not None:
-            mentions.append(candidate)
+            mentions.append({"value": candidate, "start": match.start(), "end": match.end()})
 
     for match in month_day_pattern.finditer(text):
         month = _month_number(match.group(1))
@@ -2209,30 +2547,43 @@ def _date_mentions(text: str, today: date) -> list[date]:
             continue
         candidate = _future_date_for_day_month(int(match.group(2)), month, today)
         if candidate is not None:
-            mentions.append(candidate)
+            mentions.append({"value": candidate, "start": match.start(), "end": match.end()})
 
     if not mentions:
         for match in bare_day_pattern.finditer(text):
             candidate = _future_date_for_day(int(match.group(1)), today)
             if candidate is not None:
-                mentions.append(candidate)
+                mentions.append({"value": candidate, "start": match.start(), "end": match.end()})
+
+    return mentions
+
+
+def _date_mentions(text: str, today: date) -> list[date]:
+    return [mention["value"] for mention in _date_mentions_with_spans(text, today)]
+
+
+def _normalized_clock_text(text: str) -> str:
+    return re.sub(r"\b(\d{1,2})\.(\d{2})(\s*(?:am|pm)\b)", r"\1:\2\3", text, flags=re.IGNORECASE)
+
+
+def _time_mentions_with_spans(text: str) -> list[TimeMention]:
+    normalized = _normalized_clock_text(text)
+    mentions: list[TimeMention] = []
+    for match in re.finditer(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", normalized):
+        raw_hour = match.group(1)
+        raw_minute = match.group(2) or "00"
+        parsed = _text_hour_to_time(raw_hour, match.group(3))
+        if parsed is not None:
+            mentions.append({"value": parsed.replace(minute=int(raw_minute)), "start": match.start(), "end": match.end()})
+
+    for match in re.finditer(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b", normalized):
+        mentions.append({"value": time(int(match.group(1)), int(match.group(2))), "start": match.start(), "end": match.end()})
 
     return mentions
 
 
 def _clock_mentions(text: str) -> list[time]:
-    mentions: list[time] = []
-    for match in re.finditer(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text):
-        raw_hour = match.group(1)
-        raw_minute = match.group(2) or "00"
-        parsed = _text_hour_to_time(raw_hour, match.group(3))
-        if parsed is not None:
-            mentions.append(parsed.replace(minute=int(raw_minute)))
-
-    for match in re.finditer(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b", text):
-        mentions.append(time(int(match.group(1)), int(match.group(2))))
-
-    return mentions
+    return [mention["value"] for mention in _time_mentions_with_spans(text)]
 
 
 def _anchor_label(raw_anchor: str) -> str:
@@ -2408,6 +2759,178 @@ def _busy_schedule_windows() -> list[tuple[datetime, datetime]]:
     return sorted(busy_windows, key=lambda window: window[0])
 
 
+def _future_date_for_weekday(weekday: int, today: date) -> date:
+    days_ahead = (weekday - today.weekday()) % 7
+    return today + timedelta(days=days_ahead)
+
+
+def _window_text(text: str, start: int, end: int, radius: int = 90) -> str:
+    return text[max(0, start - radius) : min(len(text), end + radius)]
+
+
+def _nearest_date_for_time(
+    *,
+    date_mentions: list[DateMention],
+    time_mention: TimeMention,
+    text: str,
+    today: date,
+) -> date | None:
+    close_dates = [
+        mention
+        for mention in date_mentions
+        if abs(mention["start"] - time_mention["start"]) <= 140 or abs(mention["end"] - time_mention["end"]) <= 140
+    ]
+    if close_dates:
+        return min(close_dates, key=lambda mention: abs(mention["start"] - time_mention["start"]))["value"]
+    if len(date_mentions) == 1:
+        return date_mentions[0]["value"]
+
+    nearby = _window_text(text, time_mention["start"], time_mention["end"], radius=100)
+    nearby_weekdays = _weekday_mentions(nearby.lower())
+    if len(nearby_weekdays) == 1:
+        return _future_date_for_weekday(next(iter(nearby_weekdays)), today)
+
+    all_weekdays = _weekday_mentions(text.lower())
+    if len(all_weekdays) == 1:
+        return _future_date_for_weekday(next(iter(all_weekdays)), today)
+    return None
+
+
+def _booking_time_score(text: str, time_mention: TimeMention) -> int:
+    lowered = text.lower()
+    nearby = _window_text(lowered, time_mention["start"], time_mention["end"], radius=90)
+    before = lowered[max(0, time_mention["start"] - 55) : time_mention["start"]]
+    before_sentence = re.split(r"[.!?\n]", before)[-1]
+    score = 0
+    if _contains_any(nearby, BOOKING_SELECTION_TERMS):
+        score += 4
+    if re.search(r"\b(?:can|could|would|please|happy|prefer|preferred|works|suits|available)\b", nearby):
+        score += 2
+    if _contains_any(nearby, SCHEDULING_INTENT_TERMS):
+        score += 2
+    anchor_index = max((before_sentence.rfind(term) for term in CONTEXT_ANCHOR_TERMS), default=-1)
+    booking_index = max((before_sentence.rfind(term) for term in BOOKING_SELECTION_TERMS), default=-1)
+    if anchor_index >= 0 and booking_index < anchor_index:
+        score -= 10
+    return score
+
+
+def _booking_start_from_text(text: str) -> datetime | None:
+    normalized = _normalized_clock_text(text)
+    zone = _clinic_timezone()
+    today = datetime.now(zone).date()
+    date_mentions = _date_mentions_with_spans(normalized.lower(), today)
+    time_mentions = _time_mentions_with_spans(normalized)
+    scored_candidates: list[tuple[int, datetime]] = []
+
+    for time_mention in time_mentions:
+        candidate_date = _nearest_date_for_time(
+            date_mentions=date_mentions,
+            time_mention=time_mention,
+            text=normalized,
+            today=today,
+        )
+        if candidate_date is None:
+            continue
+        candidate_start = datetime.combine(candidate_date, time_mention["value"], tzinfo=zone)
+        if candidate_start < datetime.now(zone) - timedelta(days=1):
+            continue
+        score = _booking_time_score(normalized, time_mention)
+        if len(date_mentions) == 1:
+            score += 1
+        if candidate_date in [mention["value"] for mention in date_mentions]:
+            score += 1
+        scored_candidates.append((score, candidate_start))
+
+    if not scored_candidates:
+        return None
+
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+    top_score, top_start = scored_candidates[0]
+    if top_score < 1:
+        return None
+    top_candidates = [candidate for score, candidate in scored_candidates if score == top_score]
+    if len(set(top_candidates)) > 1:
+        return None
+    return top_start
+
+
+def _overlaps(start_at: datetime, end_at: datetime, other_start_at: datetime, other_end_at: datetime) -> bool:
+    return start_at < other_end_at and end_at > other_start_at
+
+
+def _booking_candidate_from_text(text: str, appointment_kind: str, duration_minutes: int) -> BookingCandidate | None:
+    start_at = _booking_start_from_text(text)
+    if start_at is None:
+        return None
+    end_at = start_at + timedelta(minutes=duration_minutes)
+    available, reason = _local_booking_slot_is_available(start_at, end_at)
+    return {
+        "start_at": start_at,
+        "end_at": end_at,
+        "label": _booking_label(start_at, end_at, appointment_kind, duration_minutes),
+        "available": available,
+        "reason": reason,
+    }
+
+
+def _booking_label(start_at: datetime, end_at: datetime, appointment_kind: str, duration_minutes: int) -> str:
+    return (
+        f"{start_at:%A} {start_at.day} {start_at:%b} at {_human_time(start_at.time())} - "
+        f"{_human_time(end_at.time())} ({duration_minutes}-minute {appointment_kind})"
+    )
+
+
+def _local_booking_slot_is_available(start_at: datetime, end_at: datetime) -> tuple[bool, str]:
+    zone = _clinic_timezone()
+    now = datetime.now(zone)
+    localized_start = start_at.astimezone(zone)
+    localized_end = end_at.astimezone(zone)
+    if localized_end <= localized_start:
+        return False, "The proposed appointment end time is before the start time."
+    if localized_start < now + timedelta(hours=MIN_BOOKING_NOTICE_HOURS):
+        return False, "The proposed slot is too soon to book safely."
+    if localized_start.date() != localized_end.date():
+        return False, "The proposed slot crosses clinic days."
+
+    buffer_delta = timedelta(minutes=_clinic_buffer_minutes())
+    for busy_start, busy_end in _busy_schedule_windows():
+        buffered_start = busy_start - buffer_delta
+        buffered_end = busy_end + buffer_delta
+        if _overlaps(localized_start, localized_end, buffered_start, buffered_end):
+            return False, "The proposed slot overlaps an appointment already in the local schedule cache."
+    return True, ""
+
+
+def _google_calendar_slot_is_available(
+    *,
+    client: GoogleWorkspaceHttpClient,
+    calendar_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> tuple[bool, str]:
+    events = client.list_calendar_events(
+        calendar_id=calendar_id,
+        time_min=start_at.isoformat(),
+        time_max=end_at.isoformat(),
+        max_results=10,
+    )
+    fallback = datetime.now(_clinic_timezone())
+    for event in events:
+        if event.get("status") == "cancelled":
+            continue
+        event_text = _calendar_event_text(event)
+        if _calendar_appointment_type(event_text) == "Open slot":
+            continue
+        event_start, _, _ = _calendar_edge_datetime(event.get("start"), fallback)
+        event_end, _, _ = _calendar_edge_datetime(event.get("end"), event_start)
+        if _overlaps(start_at, end_at, event_start, event_end):
+            summary = event.get("summary")
+            event_label = summary if isinstance(summary, str) and summary else "another calendar event"
+            return False, f"Google Calendar already has {event_label} during that time."
+    return True, ""
+
+
 def _round_up_to_step(value: datetime, step_minutes: int) -> datetime:
     minute = ((value.minute + step_minutes - 1) // step_minutes) * step_minutes
     rounded = value.replace(second=0, microsecond=0)
@@ -2568,6 +3091,7 @@ def _draft_reply_for_message(
     appointment_kind: str,
     slot_labels: list[str],
     request_text: str = "",
+    booking_candidate: BookingCandidate | None = None,
     constraints: SlotConstraints | None = None,
     triage: TriageResult | None = None,
 ) -> str:
@@ -2583,6 +3107,15 @@ def _draft_reply_for_message(
 
     request_focus = _request_focus_phrase(request_text, appointment_kind)
     summary_note = _reply_summary_note(summary)
+    if booking_candidate is not None and booking_candidate["available"]:
+        return (
+            f"Dear {first_name},\n\n"
+            f"Thank you for confirming. I can confirm your appointment with Dr. Shalini is booked for "
+            f"{booking_candidate['label']}.{summary_note}\n\n"
+            "Warm regards,\n"
+            "Dr. Shalini's Clinic"
+        )
+
     constraint_summary = constraints["constraint_summary"] if constraints else ""
     if constraint_summary:
         intro = (
@@ -2650,6 +3183,7 @@ def _action_priority_for_request(item: ClinicPatientRequestsItem) -> str:
 
 def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicActionsItem:
     action_kind = REPLY_REVIEW_ACTION_KIND
+    request_constraints = item["request_constraints"]
     return {
         "clinic_id": _clinic_id(),
         "action_id": _request_action_id(item["patient_request_id"], action_kind),
@@ -2669,11 +3203,17 @@ def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicAc
         "metadata": {
             "action_kind": action_kind,
             "appointment_type": item["appointment_type"],
+            "booking_candidate_available": request_constraints.get("booking_candidate_available", False),
+            "booking_candidate_duration_minutes": item["duration_minutes"],
+            "booking_candidate_end_at": str(request_constraints.get("booking_candidate_end_at", "")),
+            "booking_candidate_label": str(request_constraints.get("booking_candidate_label", "")),
+            "booking_candidate_start_at": str(request_constraints.get("booking_candidate_start_at", "")),
+            "booking_candidate_unavailable_reason": str(request_constraints.get("booking_candidate_unavailable_reason", "")),
             "patient_emotional_tone": item["patient_emotional_tone"],
             "patient_request_id": item["patient_request_id"],
-            "request_constraints": item["request_constraints"],
+            "request_constraints": request_constraints,
             "request_type": item["request_type"],
-            "constraint_summary": str(item["request_constraints"].get("constraint_summary", "")),
+            "constraint_summary": str(request_constraints.get("constraint_summary", "")),
             "requires_doctor_review": item["requires_doctor_review"],
             "risk_level": item["risk_level"],
             "suggested_next_action": item["suggested_next_action"],
@@ -2722,9 +3262,14 @@ def _gmail_message_to_patient_request_item(
     triage = _triage_gmail_request(request_text, matched_patient=matched_patient is not None)
     appointment_kind, duration_minutes = _request_appointment_details(request_text)
     constraints = _slot_constraints_from_text(request_text, appointment_kind=appointment_kind)
+    booking_candidate = (
+        None
+        if triage["risk_level"] == "high"
+        else _booking_candidate_from_text(request_text, appointment_kind, duration_minutes)
+    )
     slot_labels = (
         []
-        if triage["risk_level"] == "high"
+        if triage["risk_level"] == "high" or (booking_candidate is not None and booking_candidate["available"])
         else _suggest_free_slot_labels(
             appointment_kind=appointment_kind,
             duration_minutes=duration_minutes,
@@ -2742,6 +3287,7 @@ def _gmail_message_to_patient_request_item(
         appointment_kind=appointment_kind,
         slot_labels=slot_labels,
         request_text=request_text,
+        booking_candidate=booking_candidate,
         constraints=constraints,
         triage=triage,
     )
@@ -2762,7 +3308,20 @@ def _gmail_message_to_patient_request_item(
         "intent": intent,
         "patient_emotional_tone": triage["patient_emotional_tone"],
         "proposed_windows": slot_labels,
-        "request_constraints": _slot_constraints_record(constraints),
+        "request_constraints": {
+            **_slot_constraints_record(constraints),
+            **(
+                {
+                    "booking_candidate_start_at": booking_candidate["start_at"].isoformat(),
+                    "booking_candidate_end_at": booking_candidate["end_at"].isoformat(),
+                    "booking_candidate_label": booking_candidate["label"],
+                    "booking_candidate_available": booking_candidate["available"],
+                    "booking_candidate_unavailable_reason": booking_candidate["reason"],
+                }
+                if booking_candidate is not None
+                else {}
+            ),
+        },
         "request_type": triage["request_type"],
         "requires_doctor_review": triage["requires_doctor_review"],
         "risk_level": triage["risk_level"],
@@ -2809,6 +3368,16 @@ def _merge_action_candidate(existing: ClinicActionsItem | None, incoming: Clinic
         return incoming
     existing_data = cast(dict[str, Any], existing)
     merged_data: dict[str, Any] = {**existing_data, **incoming}
+    existing_metadata = existing_data.get("metadata", {})
+    incoming_metadata = incoming["metadata"]
+    if isinstance(existing_metadata, dict):
+        preserved_external_metadata = {
+            str(key): value
+            for key, value in existing_metadata.items()
+            if str(key).startswith("external_") or key == "sent_to"
+        }
+        if preserved_external_metadata:
+            merged_data["metadata"] = {**incoming_metadata, **preserved_external_metadata}
     merged = cast(ClinicActionsItem, merged_data)
     merged["created_at"] = str(existing_data.get("created_at", incoming["created_at"]))
     existing_status = existing_data.get("status")
@@ -2943,6 +3512,21 @@ def _handle_payload(payload: dict[str, Any]) -> dict[str, Any]:
             return json_response(400, {"error": "actionId is required"})
         try:
             response = _approve_and_send_gmail(
+                action_id,
+                str(payload.get("approvedBy") or "Dr. Shalini").strip() or "Dr. Shalini",
+                str(payload["finalMessage"]).strip() if isinstance(payload.get("finalMessage"), str) else None,
+            )
+        except (GoogleWorkspaceError, RuntimeError) as exc:
+            return json_response(400, {"error": str(exc)})
+        if "error" in response:
+            return json_response(400, response)
+        return json_response(200, response)
+    if action == "approve_send_and_book_calendar":
+        action_id = str(payload.get("actionId", "")).strip()
+        if not action_id:
+            return json_response(400, {"error": "actionId is required"})
+        try:
+            response = _approve_send_and_book_calendar(
                 action_id,
                 str(payload.get("approvedBy") or "Dr. Shalini").strip() or "Dr. Shalini",
                 str(payload["finalMessage"]).strip() if isinstance(payload.get("finalMessage"), str) else None,

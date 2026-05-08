@@ -23,10 +23,10 @@ keeps the doctor in control of any completed action.
 - Vercel project: `shalini-clinic-webui`
 - Deploy workflow: `.github/workflows/deploy.yml`
 - Deploys are manual `workflow_dispatch` runs against `build-clinic-mvp`.
-- Latest production code commit: `b061035` - Add schedule week view and
-  onboarding.
+- Latest production code commit before this change set: `9fb45f5` - Add
+  approval-gated Gmail sending.
 - Latest successful deploy run:
-  `https://github.com/suhanisho/infiapp/actions/runs/25561691114`
+  `https://github.com/suhanisho/infiapp/actions/runs/25564898598`
 
 ## Safety contract
 
@@ -38,6 +38,10 @@ This is the most important product rule:
   user approval.
 - `Approve and store` only stores completion/audit state. `Approve & send
   Gmail` is the explicit send path and records the Gmail sent message id.
+- `Approve, send & book` is the explicit Calendar booking path. It only appears
+  when the patient request contains an exact date/time, verifies the slot
+  against Google Calendar, creates the event, sends the edited Gmail
+  confirmation, and records the Calendar event id plus Gmail sent id.
 - Completed actions are stored in `clinic_actions` for future validation/audit.
 - The durable product entity is now `patient_request_id` under a per-login
   `practice_id`; `clinic_actions` stores child workflow/audit actions that link
@@ -71,11 +75,12 @@ This is the most important product rule:
   - `openid`
   - `email`
   - `https://www.googleapis.com/auth/calendar.events.readonly`
+  - `https://www.googleapis.com/auth/calendar.events`
   - `https://www.googleapis.com/auth/gmail.readonly`
   - `https://www.googleapis.com/auth/gmail.compose`
-- Existing users may need to click `Reconnect Google` after the compose scope
-  is added; otherwise approve-and-send will ask them to reconnect before
-  sending.
+- Existing users may need to click `Reconnect Google` after compose or Calendar
+  write scopes are added; otherwise approve-and-send or approve-send-and-book
+  will ask them to reconnect before sending or booking.
 
 ## Backend shape
 
@@ -116,7 +121,9 @@ Google Calendar:
 - It maps events into `clinic_schedule`.
 - It returns a rolling 14-day read-only schedule, including empty days, so the
   Schedule tab can show a complete week and the following week.
-- It does not write to Google Calendar.
+- It does not write to Google Calendar during sync.
+- Calendar writes exist only through `approve_send_and_book_calendar`, which is
+  triggered by the doctor clicking `Approve, send & book` on a specific action.
 
 Gmail:
 
@@ -154,6 +161,11 @@ Approval:
   Gmail`. This calls `approve_and_send_gmail`, sends the edited message through
   Gmail, records the Gmail sent message id on the action, and marks the linked
   patient request complete. This is the only current email-sending path.
+- For Gmail-sourced scheduling replies with an exact patient-selected slot, the
+  doctor can click `Approve, send & book`. This calls
+  `approve_send_and_book_calendar`, verifies the slot against live Google
+  Calendar, creates a Calendar event with no attendee/invite emails, sends the
+  edited Gmail confirmation, and marks the linked patient request complete.
 
 ## Scheduling design decisions
 
@@ -179,6 +191,10 @@ Approval:
     moving to the next day.
 - Contextual scheduling constraints are stored on the patient request metadata
   so future request-linked workflows can reuse the same interpretation.
+- Exact patient-selected booking slots are stored on request/action metadata as
+  `booking_candidate_*` fields, including start/end time, label, availability
+  flag, and any unavailable reason. The booking button is shown only when an
+  exact slot is available.
 - Google Calendar supports appointment schedule booking pages, so a future mode
   could share a booking link instead of proposing windows. Keep this optional
   until we are comfortable with quality and patient experience.

@@ -8,6 +8,7 @@ const GOOGLE_OAUTH_SCOPES = [
   "openid",
   "email",
   "https://www.googleapis.com/auth/calendar.events.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.compose",
 ];

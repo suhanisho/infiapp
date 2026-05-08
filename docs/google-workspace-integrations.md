@@ -1,18 +1,20 @@
 # Google Workspace integration path
 
 This app treats Google Calendar as the appointment source of truth and Gmail as
-the patient communication source. The first implementation is deliberately
-read-first and approval-gated.
+the patient communication source. Reads can prepare context and drafts, while
+external writes are deliberately approval-gated.
 
 ## Safety rules
 
-- Calendar writes are disabled until we explicitly add a user-approved write
-  workflow.
+- Calendar writes are allowed only through explicit user-approved write
+  workflows. The current Calendar write path is `approve_send_and_book_calendar`
+  for exact patient-selected appointment slots.
 - Gmail scans can create or refresh patient request records, linked in-app
   action records, and draft text, but they must not send email, label threads,
   archive messages, or create Gmail drafts automatically.
-- Gmail sending is available only through the explicit `approve_and_send_gmail`
-  action. Gmail draft creation remains a future explicit approval action.
+- Gmail sending is available only through explicit approval actions:
+  `approve_and_send_gmail` and `approve_send_and_book_calendar`. Gmail draft
+  creation remains a future explicit approval action.
 - OAuth refresh tokens must not be stored in DynamoDB. Store token material in a
   secret store, and keep only metadata such as account email, scopes, sync
   tokens, and secret IDs in DynamoDB.
@@ -53,17 +55,22 @@ read-first and approval-gated.
 - `approve_and_send_gmail` sends the edited reply into the source Gmail thread
   only after the doctor clicks the send-specific approval button. It records the
   sent Gmail message id on the action for audit.
+- `approve_send_and_book_calendar` verifies an exact requested slot against
+  live Google Calendar, creates the Calendar event with `sendUpdates=none`,
+  sends the edited Gmail confirmation, and records both external IDs for audit.
 
 ## Google scopes
 
 Use the narrowest scopes we can:
 
-- Google Calendar: `https://www.googleapis.com/auth/calendar.events.readonly`
+- Google Calendar read: `https://www.googleapis.com/auth/calendar.events.readonly`
+- Google Calendar approved event create: `https://www.googleapis.com/auth/calendar.events`
 - Gmail read: `https://www.googleapis.com/auth/gmail.readonly`
 - Gmail send after approval: `https://www.googleapis.com/auth/gmail.compose`
 
-`gmail.compose` can create drafts and send messages, so code paths using it must
-be approval-gated.
+`calendar.events` can create and mutate calendar events, and `gmail.compose`
+can create drafts and send messages, so code paths using them must be
+approval-gated.
 
 Official docs:
 
@@ -77,5 +84,6 @@ Official docs:
 
 1. Add a patient matching/review workflow for unknown Gmail senders.
 2. Add calendar-slot holds after an explicit approval step.
-3. Add an explicit `create_gmail_draft` action if we want doctor-approved Gmail
+3. Add reschedule/cancel Calendar actions with explicit approval.
+4. Add an explicit `create_gmail_draft` action if we want doctor-approved Gmail
    drafts before direct sending.

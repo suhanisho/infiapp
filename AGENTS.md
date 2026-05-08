@@ -27,11 +27,14 @@ The most important product rule is explicit approval before external action.
   without explicit doctor approval.
 - `Approve and store` is audit-only. It stores the final message and completion
   state, but does not call Gmail or Calendar.
-- `Approve & send Gmail` is the only current email-sending path. It sends the
-  edited reply through Gmail after an explicit confirmation, then records the
-  Gmail sent message id for audit.
-- Google Calendar is currently read-only and remains the source of truth for
-  appointments.
+- `Approve & send Gmail` is the send-only path. It sends the edited reply
+  through Gmail after an explicit confirmation, then records the Gmail sent
+  message id for audit.
+- `Approve, send & book` is the explicit Calendar booking path. It verifies an
+  exact patient-selected slot against Google Calendar, creates the event, sends
+  the edited Gmail confirmation, and records both external IDs for audit.
+- Google Calendar remains the source of truth for appointments. Calendar writes
+  must only happen through explicit approval actions.
 - Gmail is the source of patient communication. Gmail scans may read messages,
   create patient requests, and prepare in-app draft replies, but they must not
   send, label, archive, or delete messages.
@@ -67,24 +70,31 @@ Current OAuth scopes:
 - `openid`
 - `email`
 - `https://www.googleapis.com/auth/calendar.events.readonly`
+- `https://www.googleapis.com/auth/calendar.events`
 - `https://www.googleapis.com/auth/gmail.readonly`
 - `https://www.googleapis.com/auth/gmail.compose`
 
 Important: existing users may need to click `Reconnect Google` after scope
-changes. If `Approve & send Gmail` fails because compose permission is missing,
-ask the user to reconnect Google.
+changes. If Gmail send or Calendar booking fails because a Google permission is
+missing, ask the user to reconnect Google.
 
 Gmail sending must:
 
-- only happen through `approve_and_send_gmail`
+- only happen through `approve_and_send_gmail` or
+  `approve_send_and_book_calendar`
 - only work for Gmail-sourced actions
 - send the edited final message, not an unreviewed draft
 - reply in the source Gmail thread when source thread/message ids are present
 - record `external_sent_message_id`
 - mark the linked patient request completed when relevant
 
-Calendar writes are still not implemented. Do not add Calendar mutation without
-a separate approval-gated action and tests.
+Calendar writes must:
+
+- only happen through `approve_send_and_book_calendar` for now
+- verify the exact slot against live Google Calendar immediately before booking
+- create events with `sendUpdates=none`; patient communication stays in Gmail
+- record the external Calendar event id for audit
+- stay covered by tests whenever a new Calendar mutation path is added
 
 ## Frontend Direction
 

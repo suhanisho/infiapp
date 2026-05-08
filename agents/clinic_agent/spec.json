@@ -87,6 +87,48 @@
       }
     },
     {
+      "call": "approve_send_and_book_calendar",
+      "description": "Records explicit doctor approval, books the exact patient-selected slot in Google Calendar, and sends the edited Gmail confirmation.",
+      "input": {
+        "actionId": "String",
+        "actorEmail?": "String",
+        "approvedBy?": "String",
+        "finalMessage?": "String"
+      },
+      "output": {
+        "action": {
+          "actionId": "String",
+          "actionType": "String",
+          "approvedAt": "String | Null",
+          "approvedBy": "String | Null",
+          "completedAt": "String | Null",
+          "completionNote": "String | Null",
+          "createdAt": "String",
+          "draftMessage": "String | Null",
+          "externalDraftId": "String | Null",
+          "externalSentMessageId": "String | Null",
+          "finalMessage": "String | Null",
+          "metadata": "Map",
+          "patientId": "String | Null",
+          "patientName": "String | Null",
+          "patientRequestId": "String | Null",
+          "priority": "String",
+          "practiceId": "String",
+          "sourceMessage": "String | Null",
+          "sourceMessageId": "String | Null",
+          "sourceProvider": "String",
+          "sourceSummary": "String",
+          "sourceThreadId": "String | Null",
+          "status": "String",
+          "timeLabel": "String",
+          "updatedAt": "String"
+        },
+        "calendarEventId": "String",
+        "externalWrites": "Number",
+        "message": "String"
+      }
+    },
+    {
       "call": "connect_google_workspace",
       "description": "Stores Auth.js-verified Google token material in a secret store and records safe Google Workspace connection metadata.",
       "input": {

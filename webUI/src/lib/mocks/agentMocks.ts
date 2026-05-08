@@ -128,6 +128,52 @@ const actions: MockAction[] = [
     updatedAt: "2026-05-02T07:15:00+00:00",
   },
   {
+    actionId: "act_005",
+    actionType: "appointment_request",
+    priority: "action",
+    practiceId: mockPracticeId,
+    status: "needs_approval",
+    patientId: "p11",
+    patientName: "Nina Shah",
+    patientRequestId: "seed-request-nina-shah",
+    timeLabel: "10:12 AM",
+    sourceSummary: "Patient selected Friday afternoon follow-up slot",
+    sourceMessage:
+      "Hi, thank you for the options. My scan is on 15 May at 3pm, and 4:30pm on the same day would work for a follow-up if Dr. Shalini is free. Best, Nina",
+    sourceProvider: "gmail",
+    sourceThreadId: "gmail-thread-nina-shah",
+    sourceMessageId: "gmail-message-nina-shah",
+    draftMessage:
+      "Dear Nina,\n\nThank you for confirming. I can confirm your appointment with Dr. Shalini is booked for Friday 15 May at 4:30 PM - 4:50 PM (20-minute Follow-up).\n\nWarm regards,\nDr. Shalini's Clinic",
+    externalDraftId: null,
+    externalSentMessageId: null,
+    metadata: {
+      appointment_type: "Follow-up",
+      booking_candidate_available: true,
+      booking_candidate_duration_minutes: 20,
+      booking_candidate_end_at: "2026-05-15T16:50:00+01:00",
+      booking_candidate_label: "Friday 15 May at 4:30 PM - 4:50 PM (20-minute Follow-up)",
+      booking_candidate_start_at: "2026-05-15T16:30:00+01:00",
+      booking_candidate_unavailable_reason: "",
+      request_type: "appointment_request",
+      urgency_level: "routine",
+      risk_level: "low",
+      requires_doctor_review: false,
+      suggested_next_action: "Review the draft, then book the selected slot and send the confirmation.",
+      patient_emotional_tone: "neutral",
+      triage_category: "appointment_request",
+      triage_confidence: "0.88",
+      triage_reason: "Message contains a specific patient-selected appointment time.",
+    },
+    finalMessage: null,
+    approvedAt: null,
+    approvedBy: null,
+    completedAt: null,
+    completionNote: null,
+    createdAt: "2026-05-08T09:12:00+00:00",
+    updatedAt: "2026-05-08T09:12:00+00:00",
+  },
+  {
     actionId: "act_003",
     actionType: "nhs",
     priority: "info",
@@ -270,6 +316,17 @@ const basePatients = [
     visits: 0,
     status: "new",
     notes: "New enquiry via email. Referred by Dr. Patel, Angel Medical Centre. Prefers afternoon appointments.",
+  },
+  {
+    patientId: "p11",
+    name: "Nina Shah",
+    email: "nina.shah@example.com",
+    phone: "07111 222 333",
+    lastVisit: "-",
+    nextAppt: "Pending confirmation",
+    visits: 0,
+    status: "new",
+    notes: "Follow-up requested after scan. Prefers same-day appointment when possible.",
   },
 ];
 
@@ -457,8 +514,11 @@ const integrations: MockIntegration[] = [
     calendarId: "primary",
     lastSyncAt: null,
     lastError: null,
-    requiredScopes: ["https://www.googleapis.com/auth/calendar.events.readonly"],
-    writeMode: "read_only_source_of_truth",
+    requiredScopes: [
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/calendar.events",
+    ],
+    writeMode: "read_source_book_after_approval",
     connectedAt: null,
   },
   {
@@ -601,6 +661,57 @@ function approveAndSendGmail(payload: MockPayload) {
   };
 }
 
+function approveSendAndBookCalendar(payload: MockPayload) {
+  const actionId = typeof payload.actionId === "string" ? payload.actionId : "";
+  const action = actions.find((item) => item.actionId === actionId);
+  if (!action) {
+    throw new Error(`action not found: ${actionId}`);
+  }
+  const startAt = typeof action.metadata.booking_candidate_start_at === "string" ? action.metadata.booking_candidate_start_at : "";
+  const endAt = typeof action.metadata.booking_candidate_end_at === "string" ? action.metadata.booking_candidate_end_at : "";
+  if (!startAt || !endAt) {
+    throw new Error("No exact appointment date and time was found in the patient request.");
+  }
+
+  const approved = approveAndSendGmail(payload) as { action: MockAction; externalWrites: number; message: string };
+  const timestamp = nowIso();
+  const calendarEventId = `mock-calendar-${action.actionId}`;
+  action.completionNote = "Doctor explicitly approved, Gmail sent this message, and Google Calendar was updated.";
+  action.metadata = {
+    ...action.metadata,
+    external_action: "gmail_send_calendar_book",
+    external_calendar_event_id: calendarEventId,
+  };
+
+  const startDate = new Date(startAt);
+  const endDate = new Date(endAt);
+  const dayDate = startAt.slice(0, 10);
+  const day = scheduleDays.find((item) => item.dayDate === dayDate);
+  if (day) {
+    day.events.push({
+      eventId: calendarEventId,
+      startTime: startDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }),
+      endTime: endDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }),
+      patientName: action.patientName || "Patient",
+      patientId: action.patientId,
+      appointmentType: typeof action.metadata.appointment_type === "string" ? action.metadata.appointment_type : action.actionType,
+      externalCalendarId: "primary",
+      externalEventId: calendarEventId,
+      lastSyncedAt: timestamp,
+      sourceProvider: "google_calendar",
+      status: "upcoming",
+    });
+  }
+
+  approved.action = clone(action);
+  return {
+    action: approved.action,
+    calendarEventId,
+    externalWrites: 2,
+    message: "appointment booked in Google Calendar and Gmail confirmation sent after explicit approval",
+  };
+}
+
 export async function callMockAgent(agentName: string, rawPayload: unknown): Promise<unknown> {
   const payload = assertPayload(rawPayload);
   if (agentName !== "clinic_agent") {
@@ -632,6 +743,9 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
   if (payload.action === "approve_and_send_gmail") {
     return approveAndSendGmail(payload);
   }
+  if (payload.action === "approve_send_and_book_calendar") {
+    return approveSendAndBookCalendar(payload);
+  }
   if (payload.action === "list_patients") {
     return { patients: clone(patients) };
   }
@@ -645,7 +759,7 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
     return {
       integrations: clone(integrations),
       safety: {
-        calendarWrites: "disabled",
+        calendarWrites: "requires_explicit_approval",
         gmailSends: "requires_explicit_approval",
         tokenStorage: "external_secret_store",
       },
