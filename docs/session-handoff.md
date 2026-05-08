@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App Handoff
 
-Last updated: 2026-05-07 (end of day)
+Last updated: 2026-05-08
 
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
@@ -23,10 +23,10 @@ keeps the doctor in control of any completed action.
 - Vercel project: `shalini-clinic-webui`
 - Deploy workflow: `.github/workflows/deploy.yml`
 - Deploys are manual `workflow_dispatch` runs against `build-clinic-mvp`.
-- Latest production code commit: `d7728b3` - Respect patient context in
-  appointment drafts.
+- Latest production code commit: `b061035` - Add schedule week view and
+  onboarding.
 - Latest successful deploy run:
-  `https://github.com/suhanisho/infiapp/actions/runs/25518339853`
+  `https://github.com/suhanisho/infiapp/actions/runs/25561691114`
 
 ## Safety contract
 
