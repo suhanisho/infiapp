@@ -4,7 +4,7 @@ import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 import crypto from "node:crypto";
 
-import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientRequestsInput, type ClinicAgentListPatientRequestsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
+import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentApproveAndSendGmailInput, type ClinicAgentApproveAndSendGmailOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientRequestsInput, type ClinicAgentListPatientRequestsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
 
 type AgentBackendMode = "mock" | "aws_oidc";
 
@@ -146,6 +146,14 @@ export async function callClinicAgentApproveAction(input: ClinicAgentApproveActi
     return mockCallClinicAgent(payload) as Promise<ClinicAgentApproveActionOutput>;
   }
   return invokeLambda<ClinicAgentApproveActionOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentApproveAndSendGmail(input: ClinicAgentApproveAndSendGmailInput): Promise<ClinicAgentApproveAndSendGmailOutput> {
+  const payload: { action: "approve_and_send_gmail" } & ClinicAgentApproveAndSendGmailInput = { action: "approve_and_send_gmail", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentApproveAndSendGmailOutput>;
+  }
+  return invokeLambda<ClinicAgentApproveAndSendGmailOutput>("clinic_agent", payload);
 }
 
 export async function callClinicAgentConnectGoogleWorkspace(input: ClinicAgentConnectGoogleWorkspaceInput): Promise<ClinicAgentConnectGoogleWorkspaceOutput> {

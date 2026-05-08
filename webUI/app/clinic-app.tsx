@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { signIn, signOut } from "next-auth/react";
 import type {
   ClinicAgentApproveActionOutput,
+  ClinicAgentApproveAndSendGmailOutput,
   ClinicAgentListActionsOutput,
   ClinicAgentListIntegrationsOutput,
   ClinicAgentListPatientsOutput,
@@ -280,13 +281,17 @@ function Rounds({
   days,
   loading,
   onApprove,
+  onSend,
   approvingId,
+  sendingId,
 }: {
   actions: ClinicAction[];
   days: ScheduleDay[];
   loading: boolean;
   onApprove: (action: ClinicAction, finalMessage: string) => Promise<void>;
+  onSend: (action: ClinicAction, finalMessage: string) => Promise<void>;
   approvingId: string | null;
+  sendingId: string | null;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
@@ -451,11 +456,21 @@ function Rounds({
 
                   {action.draftMessage ? (
                     <div className="action-controls">
+                      {action.sourceProvider === "gmail" ? (
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => void onSend(action, draftValue)}
+                          disabled={sendingId === action.actionId || approvingId === action.actionId}
+                        >
+                          {sendingId === action.actionId ? "Sending..." : "Approve & send Gmail"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        className="primary-button"
+                        className={action.sourceProvider === "gmail" ? "secondary-button" : "primary-button"}
                         onClick={() => void onApprove(action, draftValue)}
-                        disabled={approvingId === action.actionId}
+                        disabled={approvingId === action.actionId || sendingId === action.actionId}
                       >
                         {approvingId === action.actionId ? "Saving..." : "Approve and store"}
                       </button>
@@ -971,6 +986,7 @@ export function ClinicApp({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
   const [scanningGmail, setScanningGmail] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
@@ -1011,7 +1027,7 @@ export function ClinicApp({
           const connected = integrationData.integrations.some((integration) => integration.status === "connected");
           setIntegrations(integrationData.integrations);
           if (connected) {
-            setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
+            setNotice("Google connected. Gmail sends only happen after you approve a specific reply.");
           } else {
           setError(
             "Google authorization completed, but the backend did not save the connection. Try Reconnect Google again.",
@@ -1048,6 +1064,38 @@ export function ClinicApp({
       setError(approveError instanceof Error ? approveError.message : "Unable to approve action");
     } finally {
       setApprovingId(null);
+    }
+  }
+
+  async function approveAndSendGmail(action: ClinicAction, finalMessage: string) {
+    const messageToSend = finalMessage.trim() || action.draftMessage || action.sourceSummary;
+    const confirmed = window.confirm("Send this edited reply to the patient now through Gmail?");
+    if (!confirmed) {
+      return;
+    }
+
+    setSendingId(action.actionId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`/api/clinic/actions/${action.actionId}/send`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          approvedBy: "Dr. Shalini",
+          finalMessage: messageToSend,
+        }),
+      });
+      const body = (await response.json()) as ClinicAgentApproveAndSendGmailOutput & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Unable to send Gmail reply");
+      }
+      setActions((current) => current.map((item) => (item.actionId === body.action.actionId ? body.action : item)));
+      setNotice("Gmail reply sent after your approval.");
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "Unable to send Gmail reply");
+    } finally {
+      setSendingId(null);
     }
   }
 
@@ -1110,7 +1158,7 @@ export function ClinicApp({
     }
     if (mockAuthAvailable) {
       setIntegrations((current) => connectedIntegrationState(current));
-      setNotice("Google connected. Calendar and Gmail stay read-only until you approve a specific request.");
+      setNotice("Google connected. Gmail sends only happen after you approve a specific reply.");
       return;
     }
     setError("Google OAuth is not configured yet.");
@@ -1179,7 +1227,9 @@ export function ClinicApp({
             days={days}
             loading={loading}
             onApprove={approveAction}
+            onSend={approveAndSendGmail}
             approvingId={approvingId}
+            sendingId={sendingId}
           />
         ) : null}
         {!showOnboarding && tab === "schedule" ? <Schedule days={days} /> : null}

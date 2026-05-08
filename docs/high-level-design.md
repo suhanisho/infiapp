@@ -19,9 +19,10 @@ The core idea is:
   suggested replies, and keeps the doctor in control.
 - No external action is taken without explicit user approval.
 
-The MVP is intentionally read-first. It can scan, summarize, suggest, and store
-approval/audit state. It does not send emails, create Gmail drafts, or write to
-Google Calendar.
+The MVP is intentionally approval-first. It can scan, summarize, suggest, store
+approval/audit state, and send Gmail replies only through the explicit
+`Approve & send Gmail` path. It does not create Gmail drafts or write to Google
+Calendar.
 
 ## Safety Contract
 
@@ -31,8 +32,9 @@ This is the most important design rule in the system:
 - No Gmail draft is created without explicit user approval.
 - No calendar event is created, updated, deleted, or blocked without explicit
   user approval.
-- Current approvals only store completed state and audit information in the
-  backend.
+- `Approve and store` only records completed state and audit information.
+- `Approve & send Gmail` is the only current external action. It sends the
+  edited Gmail reply after explicit approval and records the sent message id.
 - Future external actions must be modeled as separate child actions and must
   require explicit approval.
 
@@ -441,12 +443,19 @@ sequenceDiagram
     participant Web as Next.js WebUI
     participant Lambda as clinic_agent Lambda
     participant DB as DynamoDB
+    participant Gmail as Gmail API
 
     User->>Web: Review request and edit draft
     User->>Web: Click "Approve and store"
     Web->>Lambda: approve_action
     Lambda->>DB: Mark action completed
     Lambda->>DB: Update linked patient_request completion fields
+    Lambda->>Web: Return updated state
+
+    User->>Web: Or click "Approve & send Gmail"
+    Web->>Lambda: approve_and_send_gmail
+    Lambda->>Gmail: Send edited reply in source thread
+    Lambda->>DB: Store sent Gmail message id and completion audit
     Lambda->>Web: Return updated state
 ```
 
@@ -456,15 +465,16 @@ Current approval behavior:
 - Marks the child action as completed.
 - Updates the linked patient request when relevant.
 - Preserves audit fields.
+- For Gmail-sourced actions only, `approve_and_send_gmail` sends the edited
+  message through Gmail after the doctor clicks the send-specific approval
+  button, then records the Gmail sent message id on the action.
 
 Current approval does not:
 
-- send an email
 - create a Gmail draft
 - create or update a calendar event
 
-This is deliberate. External side effects will be separate approval-gated
-actions later.
+Email sending is deliberately isolated to the explicit Gmail send approval path.
 
 ## Authentication And Google OAuth
 
@@ -473,7 +483,7 @@ Auth uses Auth.js/NextAuth v4.
 The same Google OAuth app is used for:
 
 - Google sign-in
-- requesting read-only Gmail/Calendar access
+- requesting Gmail/Calendar access for the approved workflows
 
 The OAuth client ID and client secret are app-level credentials. They are not
 different for each user. Different users sign in through the same Google OAuth
@@ -485,13 +495,11 @@ Current Google scopes:
 - `email`
 - `https://www.googleapis.com/auth/calendar.events.readonly`
 - `https://www.googleapis.com/auth/gmail.readonly`
-
-Future Gmail draft/send scope:
-
 - `https://www.googleapis.com/auth/gmail.compose`
 
-Do not add `gmail.compose` until create-draft and send-email are implemented as
-separate explicit approval actions.
+`gmail.compose` is present because approve-and-send is now implemented as a
+separate explicit approval action. Existing users must reconnect Google to grant
+the new scope before sending.
 
 ## Production And Mock Boundaries
 
@@ -543,7 +551,6 @@ Near-term extensions:
 Future approval-gated actions:
 
 - Create Gmail draft.
-- Send Gmail draft.
 - Hold calendar slot.
 - Book calendar appointment.
 - Ask patient for missing information.
@@ -560,9 +567,8 @@ Future multi-user work:
 
 The current MVP does not:
 
-- send patient emails
 - create Gmail drafts
-- mutate Gmail threads
+- label, archive, or delete Gmail threads
 - create or edit Google Calendar events
 - auto-book appointments
 - make medical decisions

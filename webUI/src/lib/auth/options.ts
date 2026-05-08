@@ -9,6 +9,7 @@ const GOOGLE_OAUTH_SCOPES = [
   "email",
   "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.compose",
 ];
 
 const LOCAL_AUTH_SECRET = "local-development-auth-secret-for-shalini-clinic";

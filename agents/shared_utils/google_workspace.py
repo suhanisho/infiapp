@@ -29,7 +29,7 @@ QueryParams = Mapping[str, object] | Sequence[tuple[str, object]]
 
 
 class GoogleWorkspaceError(RuntimeError):
-    """Raised when Google refuses or cannot complete a read-only request."""
+    """Raised when Google refuses or cannot complete a Workspace request."""
 
 
 class CalendarSyncPreview(TypedDict):
@@ -152,6 +152,17 @@ class GoogleWorkspaceHttpClient:
             headers={"Authorization": f"Bearer {self.access_token}"},
         )
 
+    def _post_json(self, url: str, payload: Mapping[str, Any]) -> JsonObject:
+        return _json_request(
+            url,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+            },
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
     def list_calendar_events(
         self,
         *,
@@ -205,6 +216,8 @@ class GoogleWorkspaceHttpClient:
                 ("metadataHeaders", "Reply-To"),
                 ("metadataHeaders", "Subject"),
                 ("metadataHeaders", "Date"),
+                ("metadataHeaders", "Message-ID"),
+                ("metadataHeaders", "References"),
             ],
         )
 
@@ -212,11 +225,16 @@ class GoogleWorkspaceHttpClient:
         url = f"{GMAIL_MESSAGES_URL}/{urllib.parse.quote(message_id, safe='')}"
         return self._get(url, {"format": "full"})
 
+    def send_gmail_message(self, *, raw_message: str, thread_id: str | None = None) -> JsonObject:
+        payload: dict[str, Any] = {"raw": raw_message}
+        if thread_id:
+            payload["threadId"] = thread_id
+        return self._post_json(f"{GMAIL_MESSAGES_URL}/send", payload)
+
 
 def required_google_scopes() -> dict[str, list[str]]:
     return {
         "google_calendar": [GOOGLE_CALENDAR_READONLY_SCOPE],
-        "gmail": [GMAIL_READONLY_SCOPE],
+        "gmail": [GMAIL_READONLY_SCOPE, GMAIL_COMPOSE_SCOPE],
         "oauth_identity": [GOOGLE_OPENID_SCOPE, GOOGLE_EMAIL_SCOPE],
-        "future_gmail_send": [GMAIL_COMPOSE_SCOPE],
     }

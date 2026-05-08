@@ -469,8 +469,11 @@ const integrations: MockIntegration[] = [
     calendarId: null,
     lastSyncAt: null,
     lastError: null,
-    requiredScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
-    writeMode: "read_inbox_prepare_in_app_drafts",
+    requiredScopes: [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.compose",
+    ],
+    writeMode: "read_inbox_send_after_approval",
     connectedAt: null,
   },
 ];
@@ -573,6 +576,31 @@ function approveAction(payload: MockPayload) {
   };
 }
 
+function approveAndSendGmail(payload: MockPayload) {
+  const actionId = typeof payload.actionId === "string" ? payload.actionId : "";
+  const action = actions.find((item) => item.actionId === actionId);
+  if (!action) {
+    throw new Error(`action not found: ${actionId}`);
+  }
+  if (action.sourceProvider !== "gmail") {
+    throw new Error("only Gmail-sourced actions can be sent by Gmail");
+  }
+  const approved = approveAction(payload) as { action: MockAction; message: string };
+  action.completionNote = "Doctor explicitly approved and Gmail sent this message.";
+  action.externalSentMessageId = `mock-gmail-sent-${action.actionId}`;
+  action.metadata = {
+    ...action.metadata,
+    external_action: "gmail_send",
+    sent_to: patients.find((patient) => patient.patientId === action.patientId)?.email || "patient@example.com",
+  };
+  approved.action = clone(action);
+  return {
+    action: approved.action,
+    externalWrites: 1,
+    message: "email sent via Gmail after explicit approval",
+  };
+}
+
 export async function callMockAgent(agentName: string, rawPayload: unknown): Promise<unknown> {
   const payload = assertPayload(rawPayload);
   if (agentName !== "clinic_agent") {
@@ -600,6 +628,9 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
   }
   if (payload.action === "approve_action") {
     return approveAction(payload);
+  }
+  if (payload.action === "approve_and_send_gmail") {
+    return approveAndSendGmail(payload);
   }
   if (payload.action === "list_patients") {
     return { patients: clone(patients) };

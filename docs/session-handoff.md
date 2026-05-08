@@ -36,8 +36,8 @@ This is the most important product rule:
 - No Gmail draft is created without explicit user approval.
 - No calendar event is created, updated, deleted, or blocked without explicit
   user approval.
-- Current MVP approvals only store completion/audit state in the backend. They
-  do not perform external side effects.
+- `Approve and store` only stores completion/audit state. `Approve & send
+  Gmail` is the explicit send path and records the Gmail sent message id.
 - Completed actions are stored in `clinic_actions` for future validation/audit.
 - The durable product entity is now `patient_request_id` under a per-login
   `practice_id`; `clinic_actions` stores child workflow/audit actions that link
@@ -72,8 +72,10 @@ This is the most important product rule:
   - `email`
   - `https://www.googleapis.com/auth/calendar.events.readonly`
   - `https://www.googleapis.com/auth/gmail.readonly`
-- Future send/draft scope would be `https://www.googleapis.com/auth/gmail.compose`,
-  but do not add it until send/draft actions are separately approval-gated.
+  - `https://www.googleapis.com/auth/gmail.compose`
+- Existing users may need to click `Reconnect Google` after the compose scope
+  is added; otherwise approve-and-send will ask them to reconnect before
+  sending.
 
 ## Backend shape
 
@@ -148,6 +150,10 @@ Approval:
   metadata. If the action links to a `patient_request_id`, the patient request
   is marked completed with the same final text and approval metadata.
 - It does not send the final text anywhere.
+- For Gmail-sourced actions, the doctor can instead click `Approve & send
+  Gmail`. This calls `approve_and_send_gmail`, sends the edited message through
+  Gmail, records the Gmail sent message id on the action, and marks the linked
+  patient request complete. This is the only current email-sending path.
 
 ## Scheduling design decisions
 
@@ -287,5 +293,4 @@ before commits to avoid unrelated churn.
 5. Consider an XL type-size setting for doctors who prefer 18px body text.
 6. Later, add explicit approval-gated actions for:
    - creating a Gmail draft
-   - sending a Gmail draft
    - holding or booking a calendar slot

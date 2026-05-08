@@ -1,7 +1,8 @@
 """Clinic assistant Lambda agent.
 
-The MVP is deliberately human-in-the-loop: this agent records proposals,
-approvals, and completions, but it does not send email or update calendars.
+The app is deliberately human-in-the-loop: this agent records proposals,
+approvals, and completions. External actions such as Gmail sending only happen
+through explicit action-specific approval paths.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ import re
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
+from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import formatdate
 from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -55,6 +58,7 @@ CLINIC_ID = LEGACY_CLINIC_ID
 _CURRENT_PRACTICE_ID: ContextVar[str] = ContextVar("clinic_agent_practice_id", default=LEGACY_CLINIC_ID)
 SEED_UPDATED_AT = "2026-05-02T00:00:00+00:00"
 COMPLETION_NOTE = "Doctor approved and stored this action. No external email or calendar action was taken by the MVP."
+GMAIL_SEND_COMPLETION_NOTE = "Doctor explicitly approved and Gmail sent this message."
 DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = (
@@ -796,7 +800,7 @@ SEED_INTEGRATIONS: list[ClinicIntegrationsItem] = [
         "calendar_sync_token": "",
         "gmail_history_id": "",
         "required_scopes": GOOGLE_SCOPES["gmail"],
-        "write_mode": "read_inbox_prepare_in_app_drafts",
+        "write_mode": "read_inbox_send_after_approval",
         "token_secret_id": "",
         "last_sync_at": "",
         "last_error": "",
@@ -1128,6 +1132,156 @@ def _approve_action(action_id: str, approved_by: str, final_message: str | None)
     }
 
 
+def _integration_has_scopes(integration: ClinicIntegrationsItem, required_scopes: list[str]) -> bool:
+    granted = {str(scope) for scope in integration["required_scopes"]}
+    return all(scope in granted for scope in required_scopes)
+
+
+def _reply_subject(subject: str) -> str:
+    cleaned = subject.strip()
+    if not cleaned:
+        return "Re: Your message to Dr. Shalini's Clinic"
+    if cleaned.lower().startswith("re:"):
+        return cleaned
+    return f"Re: {cleaned}"
+
+
+def _gmail_reply_recipient(
+    *,
+    action: ClinicActionsItem,
+    patient_request: ClinicPatientRequestsItem | None,
+    headers: dict[str, str],
+) -> str:
+    candidate = headers.get("reply-to") or headers.get("from") or ""
+    _, email_address = parseaddr(candidate)
+    if email_address:
+        return email_address.strip()
+    if patient_request and patient_request["patient_email"]:
+        return patient_request["patient_email"].strip()
+    return ""
+
+
+def _gmail_raw_reply(
+    *,
+    account_email: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    original_message_id: str,
+    original_references: str,
+) -> str:
+    message = EmailMessage()
+    message["From"] = account_email
+    message["To"] = recipient
+    message["Subject"] = _reply_subject(subject)
+    message["Date"] = formatdate(localtime=True)
+    if original_message_id:
+        message["In-Reply-To"] = original_message_id
+        message["References"] = f"{original_references} {original_message_id}".strip()
+    message.set_content(body)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+
+
+def _gmail_source_headers(client: GoogleWorkspaceHttpClient, action: ClinicActionsItem) -> dict[str, str]:
+    source_message_id = action["source_message_id"]
+    if not source_message_id:
+        return {}
+    return _gmail_headers(client.get_gmail_message_metadata(source_message_id))
+
+
+def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str | None) -> dict[str, Any]:
+    item = _find_action(action_id)
+    if item is None:
+        return {"error": f"action not found: {action_id}"}
+    if item["source_provider"] != "gmail":
+        return {"error": "only Gmail-sourced actions can be sent by Gmail"}
+    if item["status"] == "completed":
+        return {"error": "action is already completed"}
+    if item["external_sent_message_id"]:
+        return {"error": "this action already has a Gmail sent message id"}
+
+    final_text = (final_message or item["draft_message"] or item["source_summary"]).strip()
+    if not final_text:
+        return {"error": "finalMessage is required before sending"}
+
+    patient_request_id = item.get("patient_request_id", "")
+    patient_request = (
+        get_clinic_patient_requests(_practice_id(), patient_request_id)
+        if patient_request_id
+        else None
+    )
+
+    integration, client = _google_client_for_integration("gmail")
+    required_send_scopes = GOOGLE_SCOPES["gmail"]
+    if not _integration_has_scopes(integration, required_send_scopes):
+        return {"error": "Reconnect Google to grant Gmail send permission before sending."}
+
+    headers = _gmail_source_headers(client, item)
+    recipient = _gmail_reply_recipient(action=item, patient_request=patient_request, headers=headers)
+    if not recipient:
+        return {"error": "Could not determine a patient email address for this Gmail reply."}
+
+    subject = headers.get("subject", "")
+    if not subject and patient_request is not None:
+        subject = patient_request["source_subject"]
+    raw_reply = _gmail_raw_reply(
+        account_email=integration["account_email"],
+        recipient=recipient,
+        subject=subject or item["source_summary"],
+        body=final_text,
+        original_message_id=headers.get("message-id", ""),
+        original_references=headers.get("references", ""),
+    )
+    send_response = client.send_gmail_message(raw_message=raw_reply, thread_id=item["source_thread_id"] or None)
+    sent_message_id = send_response.get("id")
+    if not isinstance(sent_message_id, str) or not sent_message_id:
+        raise RuntimeError("Gmail did not return a sent message id.")
+
+    now = _now()
+    updated_metadata = {
+        **item.get("metadata", {}),
+        "external_action": "gmail_send",
+        "sent_to": recipient,
+    }
+    updated = cast(
+        ClinicActionsItem,
+        {
+            **item,
+            "status": "completed",
+            "approved_at": now,
+            "approved_by": approved_by,
+            "completed_at": now,
+            "completion_note": GMAIL_SEND_COMPLETION_NOTE,
+            "external_sent_message_id": sent_message_id,
+            "final_message": final_text,
+            "metadata": updated_metadata,
+            "updated_at": now,
+        },
+    )
+    put_clinic_actions(updated)
+    if patient_request is not None:
+        put_clinic_patient_requests(
+            cast(
+                ClinicPatientRequestsItem,
+                {
+                    **patient_request,
+                    "status": "completed",
+                    "approved_at": now,
+                    "approved_by": approved_by,
+                    "completed_at": now,
+                    "completion_note": GMAIL_SEND_COMPLETION_NOTE,
+                    "final_message": final_text,
+                    "updated_at": now,
+                },
+            )
+        )
+    return {
+        "action": _action_dto(updated),
+        "externalWrites": 1,
+        "message": "email sent via Gmail after explicit approval",
+    }
+
+
 def _list_patients() -> dict[str, Any]:
     items = sorted(_list_patient_items(), key=lambda item: item["name"])
     requests_by_patient_id: dict[str, list[dict[str, Any]]] = {}
@@ -1290,7 +1444,7 @@ def _connected_integration(
         "required_scopes": scopes,
         "write_mode": "read_only_source_of_truth"
         if integration_id == "google_calendar"
-        else "read_inbox_prepare_in_app_drafts",
+        else "read_inbox_send_after_approval",
         "token_secret_id": token_secret_id,
         "last_sync_at": "",
         "last_error": "",
@@ -2782,6 +2936,21 @@ def _handle_payload(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if "error" in response:
             return json_response(404, response)
+        return json_response(200, response)
+    if action == "approve_and_send_gmail":
+        action_id = str(payload.get("actionId", "")).strip()
+        if not action_id:
+            return json_response(400, {"error": "actionId is required"})
+        try:
+            response = _approve_and_send_gmail(
+                action_id,
+                str(payload.get("approvedBy") or "Dr. Shalini").strip() or "Dr. Shalini",
+                str(payload["finalMessage"]).strip() if isinstance(payload.get("finalMessage"), str) else None,
+            )
+        except (GoogleWorkspaceError, RuntimeError) as exc:
+            return json_response(400, {"error": str(exc)})
+        if "error" in response:
+            return json_response(400, response)
         return json_response(200, response)
     if action == "list_patients":
         return json_response(200, _list_patients())

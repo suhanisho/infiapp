@@ -11,8 +11,8 @@ read-first and approval-gated.
 - Gmail scans can create or refresh patient request records, linked in-app
   action records, and draft text, but they must not send email, label threads,
   archive messages, or create Gmail drafts automatically.
-- Gmail draft creation and Gmail sending are separate future actions. Each must
-  require an explicit approval event and preserve an audit trail.
+- Gmail sending is available only through the explicit `approve_and_send_gmail`
+  action. Gmail draft creation remains a future explicit approval action.
 - OAuth refresh tokens must not be stored in DynamoDB. Store token material in a
   secret store, and keep only metadata such as account email, scopes, sync
   tokens, and secret IDs in DynamoDB.
@@ -50,6 +50,9 @@ read-first and approval-gated.
 - Unknown senders are filtered conservatively. Automated, newsletter, and
   marketing-style messages are ignored unless they look like direct clinic or
   patient scheduling messages.
+- `approve_and_send_gmail` sends the edited reply into the source Gmail thread
+  only after the doctor clicks the send-specific approval button. It records the
+  sent Gmail message id on the action for audit.
 
 ## Google scopes
 
@@ -57,7 +60,7 @@ Use the narrowest scopes we can:
 
 - Google Calendar: `https://www.googleapis.com/auth/calendar.events.readonly`
 - Gmail read: `https://www.googleapis.com/auth/gmail.readonly`
-- Gmail draft/send path: `https://www.googleapis.com/auth/gmail.compose`
+- Gmail send after approval: `https://www.googleapis.com/auth/gmail.compose`
 
 `gmail.compose` can create drafts and send messages, so code paths using it must
 be approval-gated.
@@ -74,5 +77,5 @@ Official docs:
 
 1. Add a patient matching/review workflow for unknown Gmail senders.
 2. Add calendar-slot holds after an explicit approval step.
-3. Add explicit, separate approval actions for `create_gmail_draft` and
-   `send_gmail_draft` when we are ready to move beyond in-app drafts.
+3. Add an explicit `create_gmail_draft` action if we want doctor-approved Gmail
+   drafts before direct sending.

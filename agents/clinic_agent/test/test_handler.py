@@ -40,6 +40,9 @@ lambda_handler = cast(
 
 
 class FakeGoogleClient:
+    def __init__(self) -> None:
+        self.sent_messages: list[dict[str, Any]] = []
+
     def list_calendar_events(
         self,
         *,
@@ -72,10 +75,30 @@ class FakeGoogleClient:
                     "headers": [
                         {"name": "From", "value": "Rachel Davies <rachel.d@gmail.com>"},
                         {"name": "Subject", "value": "Appointment request"},
+                        {"name": "Message-ID", "value": "<incoming-rachel@example.com>"},
                     ]
                 },
             }
         ]
+
+    def get_gmail_message_metadata(self, message_id: str) -> dict[str, Any]:
+        return {
+            "id": message_id,
+            "threadId": "gmail-thread-live-1",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Rachel Davies <rachel.d@gmail.com>"},
+                    {"name": "Reply-To", "value": "Rachel Davies <rachel.reply@gmail.com>"},
+                    {"name": "Subject", "value": "Appointment request"},
+                    {"name": "Message-ID", "value": "<incoming-rachel@example.com>"},
+                    {"name": "References", "value": "<earlier-rachel@example.com>"},
+                ]
+            },
+        }
+
+    def send_gmail_message(self, *, raw_message: str, thread_id: str | None = None) -> dict[str, Any]:
+        self.sent_messages.append({"raw": raw_message, "thread_id": thread_id})
+        return {"id": "gmail-sent-live-1", "threadId": thread_id}
 
 
 def fake_id_token(email: str) -> str:
@@ -170,6 +193,87 @@ class ClinicAgentTest(unittest.TestCase):
         saved_item = put_action.call_args.args[0]
         self.assertEqual(saved_item["status"], "completed")
         self.assertIn("No external email or calendar action", saved_item["completion_note"])
+
+    def test_approve_and_send_gmail_requires_explicit_action_and_records_sent_id(self) -> None:
+        fake_client = FakeGoogleClient()
+        seed_action = {
+            **handler_module.SEED_ACTIONS[0],
+            "status": "needs_approval",
+            "source_provider": "gmail",
+            "source_thread_id": "gmail-thread-live-1",
+            "source_message_id": "gmail-message-live-1",
+            "external_sent_message_id": "",
+        }
+        integration = {
+            **handler_module.SEED_INTEGRATIONS[1],
+            "status": "connected",
+            "account_email": "doctor@example.com",
+            "required_scopes": handler_module.GOOGLE_SCOPES["gmail"],
+            "token_secret_id": "secret",
+        }
+        with (
+            patch.object(handler_module, "get_clinic_actions", return_value=seed_action),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
+            patch.object(handler_module, "_google_client_for_integration", return_value=(integration, fake_client)),
+            patch.object(handler_module, "put_clinic_actions") as put_action,
+        ):
+            response = lambda_handler(
+                {
+                    "action": "approve_and_send_gmail",
+                    "actionId": seed_action["action_id"],
+                    "approvedBy": "Dr. Shalini",
+                    "finalMessage": "Approved reply",
+                }
+            )
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["externalWrites"], 1)
+        self.assertEqual(body["action"]["externalSentMessageId"], "gmail-sent-live-1")
+        self.assertEqual(body["action"]["finalMessage"], "Approved reply")
+        self.assertEqual(len(fake_client.sent_messages), 1)
+        self.assertEqual(fake_client.sent_messages[0]["thread_id"], "gmail-thread-live-1")
+        saved_item = put_action.call_args.args[0]
+        self.assertEqual(saved_item["completion_note"], handler_module.GMAIL_SEND_COMPLETION_NOTE)
+        self.assertEqual(saved_item["external_sent_message_id"], "gmail-sent-live-1")
+
+    def test_approve_and_send_gmail_requires_send_scope(self) -> None:
+        fake_client = FakeGoogleClient()
+        seed_action = {
+            **handler_module.SEED_ACTIONS[0],
+            "status": "needs_approval",
+            "source_provider": "gmail",
+            "source_thread_id": "gmail-thread-live-1",
+            "source_message_id": "gmail-message-live-1",
+            "external_sent_message_id": "",
+        }
+        integration = {
+            **handler_module.SEED_INTEGRATIONS[1],
+            "status": "connected",
+            "account_email": "doctor@example.com",
+            "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "token_secret_id": "secret",
+        }
+        with (
+            patch.object(handler_module, "get_clinic_actions", return_value=seed_action),
+            patch.object(handler_module, "get_clinic_patient_requests", return_value=None),
+            patch.object(handler_module, "_google_client_for_integration", return_value=(integration, fake_client)),
+            patch.object(handler_module, "put_clinic_actions") as put_action,
+        ):
+            response = lambda_handler(
+                {
+                    "action": "approve_and_send_gmail",
+                    "actionId": seed_action["action_id"],
+                    "approvedBy": "Dr. Shalini",
+                    "finalMessage": "Approved reply",
+                }
+            )
+
+        self.assertEqual(response["statusCode"], 400)
+        body = json.loads(response["body"])
+        self.assertIn("Reconnect Google", body["error"])
+        self.assertEqual(fake_client.sent_messages, [])
+        put_action.assert_not_called()
 
     def test_approval_requires_action_id(self) -> None:
         response = lambda_handler({"action": "approve_action"})
@@ -597,7 +701,7 @@ class ClinicAgentTest(unittest.TestCase):
         token_response = {
             "access_token": "access-token",
             "refresh_token": "refresh-token",
-            "scope": "openid email https://www.googleapis.com/auth/gmail.readonly",
+            "scope": "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
             "id_token": fake_id_token("doctor@example.com"),
         }
         with (
@@ -618,9 +722,10 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(response["statusCode"], 200)
         body = json.loads(response["body"])
         self.assertNotIn("refresh-token", json.dumps(body))
-        self.assertNotIn("gmail.compose", json.dumps(body))
+        self.assertIn("gmail.compose", json.dumps(body))
         self.assertEqual(body["integrations"][0]["accountEmail"], "doctor@example.com")
         self.assertEqual(body["integrations"][0]["status"], "connected")
+        self.assertEqual(body["integrations"][1]["writeMode"], "read_inbox_send_after_approval")
         store.assert_called_once()
         self.assertEqual(put_integration.call_count, 2)
         put_member.assert_called_once()
