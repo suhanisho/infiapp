@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from generated.dynamodb import (
     ClinicActionsItem,
+    ClinicEmailMessagesItem,
     ClinicIntegrationsItem,
     ClinicPatientRequestsItem,
     ClinicPatientsItem,
@@ -33,10 +34,12 @@ from generated.dynamodb import (
     ClinicSettingsItem,
     delete_clinic_schedule,
     get_clinic_actions,
+    get_clinic_email_messages,
     get_clinic_integrations,
     get_clinic_patient_requests,
     get_clinic_patients,
     put_clinic_actions,
+    put_clinic_email_messages,
     put_clinic_integrations,
     put_clinic_patient_requests,
     put_clinic_patients,
@@ -44,6 +47,7 @@ from generated.dynamodb import (
     put_clinic_schedule,
     put_clinic_settings,
     query_clinic_actions,
+    query_clinic_email_messages,
     query_clinic_integrations,
     query_clinic_patient_requests,
     query_clinic_patients,
@@ -64,19 +68,17 @@ GMAIL_SEND_AND_BOOK_COMPLETION_NOTE = (
 )
 DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
-GMAIL_SCAN_QUERY = (
-    "in:inbox newer_than:30d "
-    "(appointment OR booking OR book OR consultation OR referral OR meet OR greet OR intro OR reschedule OR cancel "
-    "OR follow-up OR pregnant OR pregnancy OR bleeding OR pain OR movement OR result OR report OR prescription "
-    "OR invoice OR payment OR form OR directions)"
-)
-GMAIL_SCAN_MAX_MESSAGES = 10
+GMAIL_SCAN_QUERY = "in:inbox newer_than:30d -category:promotions -category:social"
+GMAIL_SCAN_MAX_MESSAGES = 25
 DEFAULT_SLOT_SUGGESTIONS = 3
 SLOT_SEARCH_DAYS = 14
 SLOT_STEP_MINUTES = 30
 MIN_BOOKING_NOTICE_HOURS = 2
 ACTOR_ASSERTION_TTL_SECONDS = 300
 REPLY_REVIEW_ACTION_KIND = "review_reply"
+CONFIRM_BOOKING_ACTION_KIND = "confirm_booking"
+REVIEW_THREAD_REPLY_ACTION_KIND = "review_thread_reply"
+AWAITING_PATIENT_SLOT_SELECTION_STATUS = "awaiting_patient_slot_selection"
 COMPLETED_STATUSES = {"completed"}
 WEEKDAY_ALIASES = {
     0: ("monday", "mondays", "mon"),
@@ -368,6 +370,24 @@ class BookingCandidate(TypedDict):
 class SentGmailReply(TypedDict):
     sent_message_id: str
     recipient: str
+
+
+class GmailMessageContext(TypedDict):
+    gmail_message_id: str
+    gmail_thread_id: str
+    message_id_header: str
+    in_reply_to: str
+    references: str
+    sender_name: str
+    sender_email: str
+    subject: str
+    snippet: str
+    message_text: str
+    source_excerpt: str
+    summary: str
+    received_at: datetime
+    time_label: str
+    message_signature: str
 
 
 def _practice_id() -> str:
@@ -1269,6 +1289,56 @@ def _send_gmail_reply_for_action(
     return {"sent_message_id": sent_message_id, "recipient": recipient}
 
 
+def _patient_request_update_after_gmail_send(
+    *,
+    patient_request: ClinicPatientRequestsItem,
+    action: ClinicActionsItem,
+    approved_by: str,
+    final_text: str,
+    sent_reply: SentGmailReply,
+    now: str,
+) -> ClinicPatientRequestsItem:
+    metadata = action.get("metadata", {})
+    action_kind = str(metadata.get("action_kind", ""))
+    has_proposed_windows = bool(patient_request.get("proposed_windows"))
+    if action_kind == REPLY_REVIEW_ACTION_KIND and has_proposed_windows:
+        return cast(
+            ClinicPatientRequestsItem,
+            {
+                **patient_request,
+                "status": AWAITING_PATIENT_SLOT_SELECTION_STATUS,
+                "approved_at": now,
+                "approved_by": approved_by,
+                "completed_at": "",
+                "completion_note": "Doctor sent proposed availability; waiting for the patient to choose an exact time.",
+                "final_message": final_text,
+                "request_constraints": {
+                    **patient_request["request_constraints"],
+                    "last_sent_gmail_message_id": sent_reply["sent_message_id"],
+                    "conversation_stage": "awaiting_patient_slot_selection",
+                },
+                "updated_at": now,
+            },
+        )
+    return cast(
+        ClinicPatientRequestsItem,
+        {
+            **patient_request,
+            "status": "completed",
+            "approved_at": now,
+            "approved_by": approved_by,
+            "completed_at": now,
+            "completion_note": GMAIL_SEND_COMPLETION_NOTE,
+            "final_message": final_text,
+            "request_constraints": {
+                **patient_request["request_constraints"],
+                "last_sent_gmail_message_id": sent_reply["sent_message_id"],
+            },
+            "updated_at": now,
+        },
+    )
+
+
 def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str | None) -> dict[str, Any]:
     item = _find_action(action_id)
     if item is None:
@@ -1317,18 +1387,25 @@ def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str
     put_clinic_actions(updated)
     if patient_request is not None:
         put_clinic_patient_requests(
-            cast(
-                ClinicPatientRequestsItem,
-                {
-                    **patient_request,
-                    "status": "completed",
-                    "approved_at": now,
-                    "approved_by": approved_by,
-                    "completed_at": now,
-                    "completion_note": GMAIL_SEND_COMPLETION_NOTE,
-                    "final_message": final_text,
-                    "updated_at": now,
-                },
+            _patient_request_update_after_gmail_send(
+                patient_request=patient_request,
+                action=item,
+                approved_by=approved_by,
+                final_text=final_text,
+                sent_reply=sent_reply,
+                now=now,
+            )
+        )
+        put_clinic_email_messages(
+            _sent_message_record_item(
+                gmail_message_id=sent_reply["sent_message_id"],
+                gmail_thread_id=item["source_thread_id"],
+                patient_request_id=patient_request_id,
+                patient_id=item["patient_id"],
+                recipient=sent_reply["recipient"],
+                subject=item["source_summary"],
+                body=final_text,
+                processed_at=now,
             )
         )
     return {
@@ -1608,8 +1685,26 @@ def _approve_send_and_book_calendar(action_id: str, approved_by: str, final_mess
                     "completed_at": now,
                     "completion_note": GMAIL_SEND_AND_BOOK_COMPLETION_NOTE,
                     "final_message": final_text,
+                    "request_constraints": {
+                        **patient_request["request_constraints"],
+                        "last_sent_gmail_message_id": sent_reply["sent_message_id"],
+                        "external_calendar_event_id": calendar_event_id,
+                        "conversation_stage": "booked",
+                    },
                     "updated_at": now,
                 },
+            )
+        )
+        put_clinic_email_messages(
+            _sent_message_record_item(
+                gmail_message_id=sent_reply["sent_message_id"],
+                gmail_thread_id=item["source_thread_id"],
+                patient_request_id=item["patient_request_id"],
+                patient_id=item["patient_id"],
+                recipient=sent_reply["recipient"],
+                subject=item["source_summary"],
+                body=final_text,
+                processed_at=now,
             )
         )
     return {
@@ -2136,6 +2231,52 @@ def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) ->
     return datetime.now(timezone.utc)
 
 
+def _normalized_message_signature(sender_email: str, subject: str, message_text: str) -> str:
+    normalized_subject = re.sub(r"^(re|fw|fwd):\s*", "", subject.strip().lower())
+    normalized_text = re.sub(r"\s+", " ", message_text.strip().lower())
+    material = f"{sender_email.strip().lower()}\n{normalized_subject}\n{normalized_text[:2000]}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _gmail_message_context(message: dict[str, Any]) -> GmailMessageContext | None:
+    message_id = message.get("id")
+    if not isinstance(message_id, str) or not message_id:
+        return None
+
+    headers = _gmail_headers(message)
+    snippet = html.unescape(str(message.get("snippet") or ""))
+    message_text = _gmail_message_text(message) or snippet
+    sender_name, sender_email = parseaddr(headers.get("from", ""))
+    normalized_sender_email = sender_email.strip().lower()
+    subject = headers.get("subject", "").strip()
+    received_at = _gmail_message_datetime(message, headers)
+    localized = received_at.astimezone(_clinic_timezone())
+    thread_id = message.get("threadId")
+    summary = _truncate(subject or message_text or snippet or "New Gmail message", 120)
+    source_excerpt = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{message_text}".strip(), 1200)
+    return {
+        "gmail_message_id": message_id,
+        "gmail_thread_id": thread_id if isinstance(thread_id, str) else "",
+        "message_id_header": headers.get("message-id", "").strip(),
+        "in_reply_to": headers.get("in-reply-to", "").strip(),
+        "references": headers.get("references", "").strip(),
+        "sender_name": sender_name,
+        "sender_email": normalized_sender_email,
+        "subject": subject,
+        "snippet": snippet,
+        "message_text": message_text,
+        "source_excerpt": source_excerpt,
+        "summary": summary,
+        "received_at": received_at,
+        "time_label": localized.strftime("%I:%M %p").lstrip("0"),
+        "message_signature": _normalized_message_signature(normalized_sender_email, subject, message_text),
+    }
+
+
+def _list_email_message_items() -> list[ClinicEmailMessagesItem]:
+    return query_clinic_email_messages(_practice_id(), scan_index_forward=True, consistent_read=True)
+
+
 def _patient_lookup_by_email() -> dict[str, ClinicPatientsItem]:
     return {item["email"].strip().lower(): item for item in _list_patient_items() if item["email"].strip()}
 
@@ -2164,6 +2305,135 @@ def _ensure_patient_for_request(item: ClinicPatientRequestsItem) -> None:
     if existing is not None:
         return
     put_clinic_patients(_patient_item_from_request(item))
+
+
+def _message_record_item(
+    context: GmailMessageContext,
+    *,
+    patient_request_id: str,
+    patient_id: str,
+    classification: str,
+    processed_at: str,
+    direction: str = "inbound",
+    to_email: str = "",
+) -> ClinicEmailMessagesItem:
+    return {
+        "practice_id": _practice_id(),
+        "gmail_message_id": context["gmail_message_id"],
+        "gmail_thread_id": context["gmail_thread_id"],
+        "message_id_header": context["message_id_header"],
+        "in_reply_to": context["in_reply_to"],
+        "references": context["references"],
+        "message_signature": context["message_signature"],
+        "patient_request_id": patient_request_id,
+        "patient_id": patient_id,
+        "direction": direction,
+        "from_email": context["sender_email"],
+        "from_name": context["sender_name"],
+        "to_email": to_email,
+        "subject": context["subject"],
+        "body_excerpt": _truncate(context["message_text"], 1200),
+        "classification": classification,
+        "source_provider": "gmail",
+        "received_at": context["received_at"].astimezone(timezone.utc).isoformat(),
+        "processed_at": processed_at,
+    }
+
+
+def _sent_message_record_item(
+    *,
+    gmail_message_id: str,
+    gmail_thread_id: str,
+    patient_request_id: str,
+    patient_id: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    processed_at: str,
+) -> ClinicEmailMessagesItem:
+    context: GmailMessageContext = {
+        "gmail_message_id": gmail_message_id,
+        "gmail_thread_id": gmail_thread_id,
+        "message_id_header": "",
+        "in_reply_to": "",
+        "references": "",
+        "sender_name": "Dr. Shalini's Clinic",
+        "sender_email": "",
+        "subject": subject,
+        "snippet": body,
+        "message_text": body,
+        "source_excerpt": body,
+        "summary": _truncate(subject or body or "Sent Gmail reply", 120),
+        "received_at": datetime.now(timezone.utc),
+        "time_label": datetime.now(_clinic_timezone()).strftime("%I:%M %p").lstrip("0"),
+        "message_signature": _normalized_message_signature(recipient, subject, body),
+    }
+    return _message_record_item(
+        context,
+        patient_request_id=patient_request_id,
+        patient_id=patient_id,
+        classification="approved_reply_sent",
+        processed_at=processed_at,
+        direction="outbound",
+        to_email=recipient,
+    )
+
+
+def _parse_sort_datetime(value: object) -> datetime:
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _prefer_conversation_request(
+    current: ClinicPatientRequestsItem | None,
+    candidate: ClinicPatientRequestsItem,
+) -> ClinicPatientRequestsItem:
+    if current is None:
+        return candidate
+    current_completed = current["status"] in COMPLETED_STATUSES
+    candidate_completed = candidate["status"] in COMPLETED_STATUSES
+    if current_completed and not candidate_completed:
+        return candidate
+    if candidate_completed and not current_completed:
+        return current
+    current_time = _parse_sort_datetime(current.get("updated_at") or current.get("created_at"))
+    candidate_time = _parse_sort_datetime(candidate.get("updated_at") or candidate.get("created_at"))
+    return candidate if candidate_time >= current_time else current
+
+
+def _request_indexes(
+    requests: list[ClinicPatientRequestsItem],
+) -> tuple[dict[str, ClinicPatientRequestsItem], dict[str, ClinicPatientRequestsItem]]:
+    by_thread: dict[str, ClinicPatientRequestsItem] = {}
+    by_source_message: dict[str, ClinicPatientRequestsItem] = {}
+    for request in requests:
+        thread_id = request["source_thread_id"].strip()
+        if thread_id:
+            by_thread[thread_id] = _prefer_conversation_request(by_thread.get(thread_id), request)
+        source_message_id = request["source_message_id"].strip()
+        if source_message_id:
+            by_source_message[source_message_id] = request
+    return by_thread, by_source_message
+
+
+def _message_indexes(
+    messages: list[ClinicEmailMessagesItem],
+) -> tuple[dict[str, ClinicEmailMessagesItem], dict[str, ClinicEmailMessagesItem], dict[str, ClinicEmailMessagesItem]]:
+    by_gmail_id: dict[str, ClinicEmailMessagesItem] = {}
+    by_header_id: dict[str, ClinicEmailMessagesItem] = {}
+    by_signature: dict[str, ClinicEmailMessagesItem] = {}
+    for message in messages:
+        by_gmail_id[message["gmail_message_id"]] = message
+        if message["message_id_header"]:
+            by_header_id[message["message_id_header"]] = message
+        if message["message_signature"]:
+            by_signature[message["message_signature"]] = message
+    return by_gmail_id, by_header_id, by_signature
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -2970,6 +3240,89 @@ def _slot_label_start_at(label: str) -> datetime | None:
     return datetime.combine(slot_date, slot_time, tzinfo=_clinic_timezone())
 
 
+def _slot_label_window(label: str) -> tuple[datetime, datetime] | None:
+    match = re.search(
+        r"\b[A-Za-z]+\s+(\d{1,2})\s+([A-Za-z]{3,}),\s+(?:between\s+)?"
+        r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s+(?:and|-)\s+"
+        r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)",
+        label,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    month = _month_number(match.group(2))
+    if month is None:
+        return None
+    today = datetime.now(_clinic_timezone()).date()
+    slot_date = _future_date_for_day_month(int(match.group(1)), month, today)
+    if slot_date is None:
+        return None
+    start_time = _text_hour_to_time(match.group(3), match.group(5))
+    end_time = _text_hour_to_time(match.group(6), match.group(8))
+    if start_time is None or end_time is None:
+        return None
+    start_time = start_time.replace(minute=int(match.group(4) or "00"))
+    end_time = end_time.replace(minute=int(match.group(7) or "00"))
+    start_at = datetime.combine(slot_date, start_time, tzinfo=_clinic_timezone())
+    end_at = datetime.combine(slot_date, end_time, tzinfo=_clinic_timezone())
+    if end_at <= start_at:
+        return None
+    return start_at, end_at
+
+
+def _booking_candidate_from_proposed_windows_reply(
+    text: str,
+    proposed_windows: list[Any],
+    appointment_kind: str,
+    duration_minutes: int,
+) -> BookingCandidate | None:
+    normalized = _normalized_clock_text(text)
+    time_mentions = _time_mentions_with_spans(normalized)
+    if not time_mentions:
+        return None
+
+    window_candidates = [
+        window
+        for window in (_slot_label_window(str(label)) for label in proposed_windows)
+        if window is not None
+    ]
+    if not window_candidates:
+        return None
+
+    scored_candidates: list[tuple[int, datetime]] = []
+    duration_delta = timedelta(minutes=duration_minutes)
+    for time_mention in time_mentions:
+        score = _booking_time_score(normalized, time_mention)
+        if score < 1:
+            continue
+        for window_start, window_end in window_candidates:
+            candidate_start = datetime.combine(window_start.date(), time_mention["value"], tzinfo=_clinic_timezone())
+            candidate_end = candidate_start + duration_delta
+            if candidate_start < window_start or candidate_end > window_end:
+                continue
+            scored_candidates.append((score, candidate_start))
+
+    if not scored_candidates:
+        return None
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+    top_score = scored_candidates[0][0]
+    top_candidates = [candidate for score, candidate in scored_candidates if score == top_score]
+    unique_candidates = sorted(set(top_candidates))
+    if len(unique_candidates) != 1:
+        return None
+
+    start_at = unique_candidates[0]
+    end_at = start_at + duration_delta
+    available, reason = _local_booking_slot_is_available(start_at, end_at)
+    return {
+        "start_at": start_at,
+        "end_at": end_at,
+        "label": _booking_label(start_at, end_at, appointment_kind, duration_minutes),
+        "available": available,
+        "reason": reason,
+    }
+
+
 def _filter_slot_labels_by_constraints(slot_labels: list[str], constraints: SlotConstraints) -> list[str]:
     if constraints["earliest_at"] is None and constraints["earliest_date"] is None:
         return slot_labels
@@ -3181,12 +3534,30 @@ def _action_priority_for_request(item: ClinicPatientRequestsItem) -> str:
     return _action_priority_for_intent(item["intent"])
 
 
+def _action_kind_for_request(item: ClinicPatientRequestsItem) -> str:
+    request_constraints = item["request_constraints"]
+    conversation_stage = str(request_constraints.get("conversation_stage", "new_request"))
+    if conversation_stage == "patient_selected_slot":
+        return CONFIRM_BOOKING_ACTION_KIND
+    if conversation_stage == "thread_reply":
+        return REVIEW_THREAD_REPLY_ACTION_KIND
+    return REPLY_REVIEW_ACTION_KIND
+
+
+def _action_id_for_request(item: ClinicPatientRequestsItem, action_kind: str) -> str:
+    if action_kind == REPLY_REVIEW_ACTION_KIND:
+        return _request_action_id(item["patient_request_id"], action_kind)
+    source_message_id = item["source_message_id"].strip()
+    action_fragment = f"{action_kind}-{source_message_id}" if source_message_id else action_kind
+    return _request_action_id(item["patient_request_id"], action_fragment)
+
+
 def _patient_request_to_action_item(item: ClinicPatientRequestsItem) -> ClinicActionsItem:
-    action_kind = REPLY_REVIEW_ACTION_KIND
+    action_kind = _action_kind_for_request(item)
     request_constraints = item["request_constraints"]
     return {
         "clinic_id": _clinic_id(),
-        "action_id": _request_action_id(item["patient_request_id"], action_kind),
+        "action_id": _action_id_for_request(item, action_kind),
         "action_type": item["request_type"],
         "priority": _action_priority_for_request(item),
         "status": item["status"],
@@ -3239,37 +3610,79 @@ def _gmail_message_to_patient_request_item(
     *,
     patient_by_email: dict[str, ClinicPatientsItem],
     synced_at: str,
+    existing_request: ClinicPatientRequestsItem | None = None,
 ) -> ClinicPatientRequestsItem | None:
-    message_id = message.get("id")
-    if not isinstance(message_id, str) or not message_id:
-        return None
-    headers = _gmail_headers(message)
-    snippet = html.unescape(str(message.get("snippet") or ""))
-    message_text = _gmail_message_text(message) or snippet
-    if not _is_clinic_message(headers=headers, snippet=f"{snippet} {message_text}", patient_by_email=patient_by_email):
+    context = _gmail_message_context(message)
+    if context is None:
         return None
 
-    sender_name, sender_email = parseaddr(headers.get("from", ""))
-    normalized_sender_email = sender_email.strip().lower()
+    headers = _gmail_headers(message)
+    if existing_request is None and not _is_clinic_message(
+        headers=headers,
+        snippet=f"{context['snippet']} {context['message_text']}",
+        patient_by_email=patient_by_email,
+    ):
+        return None
+
+    normalized_sender_email = context["sender_email"]
     matched_patient = patient_by_email.get(normalized_sender_email) if normalized_sender_email else None
-    patient_name = matched_patient["name"] if matched_patient else _patient_display_name(sender_name, sender_email)
-    patient_id = matched_patient["patient_id"] if matched_patient else (_patient_id_for_email(normalized_sender_email) if normalized_sender_email else "")
-    subject = headers.get("subject", "").strip()
-    summary = _truncate(subject or message_text or snippet or "New Gmail message", 120)
-    source_message = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{message_text}".strip(), 1200)
-    request_text = f"{subject} {message_text}"
+    if existing_request is not None:
+        patient_name = existing_request["patient_name"] or (
+            matched_patient["name"] if matched_patient else _patient_display_name(context["sender_name"], normalized_sender_email)
+        )
+        patient_id = existing_request["patient_id"] or (
+            matched_patient["patient_id"] if matched_patient else (_patient_id_for_email(normalized_sender_email) if normalized_sender_email else "")
+        )
+        patient_email = existing_request["patient_email"] or normalized_sender_email
+    else:
+        patient_name = matched_patient["name"] if matched_patient else _patient_display_name(context["sender_name"], normalized_sender_email)
+        patient_id = matched_patient["patient_id"] if matched_patient else (_patient_id_for_email(normalized_sender_email) if normalized_sender_email else "")
+        patient_email = normalized_sender_email
+
+    subject = context["subject"]
+    summary = context["summary"]
+    request_text = f"{subject} {context['message_text']}"
     intent, _ = _infer_gmail_action_type(request_text)
     triage = _triage_gmail_request(request_text, matched_patient=matched_patient is not None)
-    appointment_kind, duration_minutes = _request_appointment_details(request_text)
+    detected_appointment_kind, detected_duration_minutes = _request_appointment_details(request_text)
+    if existing_request is not None:
+        appointment_kind = existing_request["appointment_type"] or detected_appointment_kind
+        raw_duration = existing_request["duration_minutes"] or detected_duration_minutes
+        duration_minutes = int(raw_duration)
+    else:
+        appointment_kind = detected_appointment_kind
+        duration_minutes = detected_duration_minutes
     constraints = _slot_constraints_from_text(request_text, appointment_kind=appointment_kind)
     booking_candidate = (
         None
         if triage["risk_level"] == "high"
         else _booking_candidate_from_text(request_text, appointment_kind, duration_minutes)
     )
+    if existing_request is not None and booking_candidate is None and triage["risk_level"] != "high":
+        booking_candidate = _booking_candidate_from_proposed_windows_reply(
+            request_text,
+            existing_request["proposed_windows"],
+            appointment_kind,
+            duration_minutes,
+        )
+    conversation_stage = "new_request"
+    if existing_request is not None:
+        conversation_stage = "patient_selected_slot" if booking_candidate is not None else "thread_reply"
+        if booking_candidate is not None:
+            triage = {
+                **triage,
+                "request_type": "appointment_booking_selection",
+                "urgency_level": "soon",
+                "risk_level": "low",
+                "requires_doctor_review": False,
+                "suggested_next_action": "Review the selected slot, then book the appointment and send the confirmation.",
+                "triage_confidence": _dynamodb_decimal("0.92"),
+                "triage_reason": "Patient replied in an existing request thread with a specific appointment time.",
+                "action_priority": "action",
+            }
     slot_labels = (
         []
-        if triage["risk_level"] == "high" or (booking_candidate is not None and booking_candidate["available"])
+        if existing_request is not None or triage["risk_level"] == "high" or (booking_candidate is not None and booking_candidate["available"])
         else _suggest_free_slot_labels(
             appointment_kind=appointment_kind,
             duration_minutes=duration_minutes,
@@ -3277,10 +3690,15 @@ def _gmail_message_to_patient_request_item(
         )
     )
     slot_labels = _filter_slot_labels_by_constraints(slot_labels, constraints)
-    created_at = _gmail_message_datetime(message, headers)
-    thread_id = message.get("threadId")
-    localized = created_at.astimezone(_clinic_timezone())
-    patient_request_id = f"gmail-{_safe_external_fragment(message_id)}"
+    patient_request_id = (
+        existing_request["patient_request_id"]
+        if existing_request is not None
+        else (
+            f"gmail-thread-{_safe_external_fragment(context['gmail_thread_id'])}"
+            if context["gmail_thread_id"]
+            else f"gmail-{_safe_external_fragment(context['gmail_message_id'])}"
+        )
+    )
     draft_message = _draft_reply_for_message(
         patient_name,
         summary,
@@ -3297,10 +3715,10 @@ def _gmail_message_to_patient_request_item(
         "patient_request_id": patient_request_id,
         "patient_id": patient_id,
         "patient_name": patient_name,
-        "patient_email": normalized_sender_email,
-        "time_label": localized.strftime("%I:%M %p").lstrip("0"),
+        "patient_email": patient_email,
+        "time_label": context["time_label"],
         "source_summary": summary,
-        "source_excerpt": source_message,
+        "source_excerpt": context["source_excerpt"],
         "source_subject": subject,
         "draft_message": draft_message,
         "appointment_type": appointment_kind,
@@ -3310,6 +3728,11 @@ def _gmail_message_to_patient_request_item(
         "proposed_windows": slot_labels,
         "request_constraints": {
             **_slot_constraints_record(constraints),
+            "conversation_stage": conversation_stage,
+            "latest_gmail_message_id": context["gmail_message_id"],
+            "message_signature": context["message_signature"],
+            "previous_patient_request_status": existing_request["status"] if existing_request is not None else "",
+            "previous_proposed_windows": existing_request["proposed_windows"] if existing_request is not None else [],
             **(
                 {
                     "booking_candidate_start_at": booking_candidate["start_at"].isoformat(),
@@ -3333,13 +3756,13 @@ def _gmail_message_to_patient_request_item(
         "status": "needs_approval",
         "final_message": "",
         "source_provider": "gmail",
-        "source_thread_id": thread_id if isinstance(thread_id, str) else "",
-        "source_message_id": message_id,
+        "source_thread_id": context["gmail_thread_id"],
+        "source_message_id": context["gmail_message_id"],
         "approved_at": "",
         "approved_by": "",
         "completed_at": "",
         "completion_note": "",
-        "created_at": created_at.astimezone(timezone.utc).isoformat(),
+        "created_at": context["received_at"].astimezone(timezone.utc).isoformat(),
         "updated_at": synced_at,
     }
 
@@ -3354,12 +3777,20 @@ def _merge_patient_request_candidate(
     merged_data: dict[str, Any] = {**existing_data, **incoming}
     merged = cast(ClinicPatientRequestsItem, merged_data)
     merged["created_at"] = str(existing_data.get("created_at", incoming["created_at"]))
+    conversation_stage = str(incoming["request_constraints"].get("conversation_stage", "new_request"))
+    is_thread_continuation = conversation_stage in {"thread_reply", "patient_selected_slot"}
     existing_status = existing_data.get("status")
-    if isinstance(existing_status, str) and existing_status and existing_status != "needs_approval":
+    if (
+        not is_thread_continuation
+        and isinstance(existing_status, str)
+        and existing_status
+        and existing_status != "needs_approval"
+    ):
         merged["status"] = existing_status
-    for key in ("approved_at", "approved_by", "completed_at", "completion_note", "final_message"):
-        if existing_data.get(key):
-            merged_data[key] = existing_data[key]
+    if not is_thread_continuation:
+        for key in ("approved_at", "approved_by", "completed_at", "completion_note", "final_message"):
+            if existing_data.get(key):
+                merged_data[key] = existing_data[key]
     return merged
 
 
@@ -3448,27 +3879,88 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         _, client = _google_client_for_integration("gmail")
         messages = client.list_gmail_message_metadata(query=GMAIL_SCAN_QUERY, max_results=GMAIL_SCAN_MAX_MESSAGES)
         patient_by_email = _patient_lookup_by_email()
+        email_messages = _list_email_message_items()
+        messages_by_id, messages_by_header_id, messages_by_signature = _message_indexes(email_messages)
+        patient_requests = _list_patient_request_items()
+        requests_by_thread, requests_by_source_message = _request_indexes(patient_requests)
         synced_at = _now()
-        request_items: list[ClinicPatientRequestsItem] = []
-        for message in messages:
+        request_items_by_id: dict[str, ClinicPatientRequestsItem] = {}
+        message_records: list[ClinicEmailMessagesItem] = []
+
+        message_pairs = [
+            (context, message)
+            for message in messages
+            for context in [_gmail_message_context(message)]
+            if context is not None
+        ]
+        message_contexts = [context for context, _ in message_pairs]
+        messages_by_context_id = {context["gmail_message_id"]: message for context, message in message_pairs}
+
+        for context in sorted(message_contexts, key=lambda item: item["received_at"]):
+            if context["gmail_message_id"] in messages_by_id:
+                continue
+
+            duplicate_record = (
+                messages_by_header_id.get(context["message_id_header"]) if context["message_id_header"] else None
+            ) or messages_by_signature.get(context["message_signature"])
+            if duplicate_record is not None:
+                duplicate_item = _message_record_item(
+                    context,
+                    patient_request_id=duplicate_record["patient_request_id"],
+                    patient_id=duplicate_record["patient_id"],
+                    classification="duplicate",
+                    processed_at=synced_at,
+                )
+                message_records.append(duplicate_item)
+                messages_by_id[duplicate_item["gmail_message_id"]] = duplicate_item
+                if duplicate_item["message_id_header"]:
+                    messages_by_header_id[duplicate_item["message_id_header"]] = duplicate_item
+                if duplicate_item["message_signature"]:
+                    messages_by_signature[duplicate_item["message_signature"]] = duplicate_item
+                continue
+
+            message = messages_by_context_id.get(context["gmail_message_id"])
+            if message is None:
+                continue
+            existing_request = (
+                requests_by_thread.get(context["gmail_thread_id"])
+                if context["gmail_thread_id"]
+                else requests_by_source_message.get(context["gmail_message_id"])
+            )
             item = _gmail_message_to_patient_request_item(
                 message,
                 patient_by_email=patient_by_email,
                 synced_at=synced_at,
+                existing_request=existing_request,
             )
             if item is None:
                 continue
-            existing_request = get_clinic_patient_requests(_practice_id(), item["patient_request_id"])
-            action_id = _request_action_id(item["patient_request_id"], REPLY_REVIEW_ACTION_KIND)
-            existing_action = get_clinic_actions(_clinic_id(), action_id)
-            if (existing_request and existing_request["status"] in COMPLETED_STATUSES) or (
-                existing_action and existing_action["status"] in COMPLETED_STATUSES
-            ):
-                continue
-            request_items.append(item)
+            request_items_by_id[item["patient_request_id"]] = item
+            if item["source_thread_id"]:
+                requests_by_thread[item["source_thread_id"]] = item
+            if item["source_message_id"]:
+                requests_by_source_message[item["source_message_id"]] = item
 
-        sorted_requests = sorted(request_items, key=lambda item: item["created_at"], reverse=True)
+            conversation_stage = str(item["request_constraints"].get("conversation_stage", "new_request"))
+            message_record = _message_record_item(
+                context,
+                patient_request_id=item["patient_request_id"],
+                patient_id=item["patient_id"],
+                classification=conversation_stage,
+                processed_at=synced_at,
+            )
+            message_records.append(message_record)
+            messages_by_id[message_record["gmail_message_id"]] = message_record
+            if message_record["message_id_header"]:
+                messages_by_header_id[message_record["message_id_header"]] = message_record
+            if message_record["message_signature"]:
+                messages_by_signature[message_record["message_signature"]] = message_record
+
+        sorted_requests = sorted(request_items_by_id.values(), key=lambda item: item["created_at"], reverse=True)
         sorted_actions = _upsert_gmail_request_candidates(sorted_requests)
+        for message_record in message_records:
+            if get_clinic_email_messages(_practice_id(), message_record["gmail_message_id"]) is None:
+                put_clinic_email_messages(message_record)
         _mark_integration_success("gmail", synced_at)
         return {
             "status": "synced",
@@ -3476,7 +3968,7 @@ def _scan_gmail_inbox() -> dict[str, Any]:
             "writeMode": "read_inbox_prepare_in_app_drafts",
             "externalWrites": 0,
             "messagesScanned": len(messages),
-            "proposedActions": len(request_items),
+            "proposedActions": len(sorted_actions),
             "practiceId": _practice_id(),
             "message": "Gmail read completed. Patient requests and in-app drafts were prepared; no email was sent or drafted in Gmail.",
             "actions": [_action_dto(item) for item in sorted_actions],

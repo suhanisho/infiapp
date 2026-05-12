@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App High-Level Design
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 This document records the current product and system design for the clinic app.
 It is meant to be readable by a new contributor, a future Codex session, or
@@ -17,6 +17,8 @@ The core idea is:
 - Google Calendar is the source of truth for appointments.
 - The app reads Gmail and Calendar, organizes likely patient requests, drafts
   suggested replies, and keeps the doctor in control.
+- Gmail messages are treated as events inside an ongoing patient request, not as
+  separate requests by default.
 - No external action is taken without explicit user approval.
 
 The MVP is intentionally approval-first. It can scan, summarize, suggest, store
@@ -109,7 +111,9 @@ erDiagram
     PRACTICE ||--o{ PRACTICE_MEMBER : has
     PRACTICE ||--o{ PATIENT : has
     PRACTICE ||--o{ PATIENT_REQUEST : receives
+    PRACTICE ||--o{ EMAIL_MESSAGE : observes
     PATIENT ||--o{ PATIENT_REQUEST : linked_by_patient_id
+    PATIENT_REQUEST ||--o{ EMAIL_MESSAGE : has
     PATIENT_REQUEST ||--o{ ACTION : has
     PRACTICE ||--o{ SCHEDULE_EVENT : caches
     PRACTICE ||--o{ INTEGRATION : connects
@@ -126,6 +130,10 @@ Key:
 - `patient_request_id`
 
 It represents one patient-facing request or case, usually discovered from Gmail.
+A request may contain multiple Gmail messages over time. For example, the first
+email may ask for an appointment, the doctor may approve a reply with available
+windows, and a later patient reply may select an exact slot. Those are all part
+of the same `patient_request_id`.
 Examples:
 
 - A meet-and-greet request.
@@ -159,6 +167,46 @@ Design decision:
 
 - This record should be durable. A later Gmail scan should update it, not delete
   it just because it did not appear in the latest limited Gmail result set.
+- `source_thread_id` is used to attach later replies to the same request.
+- `source_message_id` points at the latest relevant Gmail message for the
+  request, while the full processed message trail is stored in
+  `clinic_email_messages`.
+- After the doctor sends proposed availability windows, the request moves to
+  `awaiting_patient_slot_selection` instead of `completed`. A later patient
+  reply in the same Gmail thread can then become a booking confirmation action.
+
+### `clinic_email_messages`
+
+This table is the Gmail message ledger and idempotency layer.
+
+Key:
+
+- `practice_id`
+- `gmail_message_id`
+
+Important fields:
+
+- `gmail_thread_id`
+- `message_id_header`
+- `message_signature`
+- `patient_request_id`
+- `patient_id`
+- `direction`
+- `classification`
+- `subject`
+- `body_excerpt`
+- `received_at`
+- `processed_at`
+
+Design decision:
+
+- Every processed inbound or approved outbound Gmail message should be recorded
+  here.
+- If the same Gmail message id, RFC `Message-ID`, or normalized message
+  signature appears again, the scanner treats it as already handled or a
+  duplicate instead of creating a second request.
+- This table lets the scanner distinguish a new request from a reply in an
+  existing thread.
 
 ### `clinic_actions`
 
@@ -287,18 +335,25 @@ sequenceDiagram
 
     User->>Web: Click "Scan Gmail"
     Web->>Lambda: scan_gmail_inbox with signed actor assertion
-    Lambda->>Gmail: Read recent matching messages and full message content
+    Lambda->>Gmail: Read recent inbox messages and full message content
+    Lambda->>DB: Check processed Gmail message ledger
     Lambda->>Lambda: Filter unrelated/non-patient email
+    Lambda->>Lambda: Resolve new request vs existing thread reply
     Lambda->>Lambda: Extract triage and scheduling context
+    Lambda->>DB: Record processed Gmail message
     Lambda->>DB: Upsert patient_request
-    Lambda->>DB: Upsert linked review_reply action
+    Lambda->>DB: Upsert linked review or booking action
     Lambda->>Web: Return requests/actions for review
 ```
 
 Current Gmail behavior:
 
-- Lists recent Gmail messages matching clinic-oriented terms, then fetches full
-  read-only message content for likely clinic messages.
+- Lists recent inbox messages, then fetches full read-only message content.
+- Checks `clinic_email_messages` first so already-seen Gmail messages and
+  duplicate patient messages do not create duplicate requests.
+- Uses Gmail `threadId`, RFC message headers, sender, patient id, and existing
+  request state to decide whether a message starts a new request or belongs to
+  an existing request.
 - Filters obvious non-patient messages such as newsletters, no-reply senders,
   password resets, promotions, and generic marketing.
 - Creates or updates `clinic_patient_requests`.
@@ -315,6 +370,12 @@ Current Gmail behavior:
   draft and does not propose appointment availability windows.
 - Drafts a suggested reply for review using the original patient message and
   extracted context.
+- If a patient replies in an existing thread with an exact selected slot, the app
+  keeps the same `patient_request_id` and creates a booking confirmation action
+  with `Approve, send & book`.
+- If the reply only says something like `4.30pm works`, the app can resolve that
+  against the previously proposed availability windows when there is a single
+  unambiguous match.
 - Does not send email.
 - Does not create Gmail drafts.
 - Does not label, archive, or mutate Gmail messages.
@@ -490,6 +551,8 @@ Current approval behavior:
 - For Gmail-sourced actions only, `approve_and_send_gmail` sends the edited
   message through Gmail after the doctor clicks the send-specific approval
   button, then records the Gmail sent message id on the action.
+- If that approved send contains proposed availability windows, the linked
+  request is marked `awaiting_patient_slot_selection`, not completed.
 - For Gmail-sourced actions with an exact patient-selected slot,
   `approve_send_and_book_calendar` creates the Google Calendar event and sends
   the edited Gmail confirmation after the doctor clicks the booking-specific

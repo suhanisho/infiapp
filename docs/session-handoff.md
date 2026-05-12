@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App Handoff
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
@@ -13,6 +13,9 @@ Build a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
 source of truth for appointments. Gmail is the source of patient communication.
 The app reads both, prepares patient requests, triage, and draft replies, and
 keeps the doctor in control of any completed action.
+Gmail messages are now treated as events inside an ongoing patient request, so a
+patient reply in the same thread should update the existing request rather than
+starting a duplicate one.
 
 ## Current branch and deployment
 
@@ -48,6 +51,8 @@ This is the most important product rule:
   back to a patient request. This allows one request to have multiple future
   actions such as reply review, Gmail draft creation, sending, booking, or
   document follow-up.
+- Processed Gmail messages are stored in `clinic_email_messages` for
+  idempotency, duplicate detection, thread continuity, and future audit.
 - Patients are identified by `patient_id`. People who log into the app are
   practice members; patients remain separate patient records.
 - Google OAuth refresh/access token material is stored in AWS Secrets Manager,
@@ -95,6 +100,7 @@ Shared Google client:
 DynamoDB specs:
 
 - `dynamodb/clinic_agent/clinic_actions.json`
+- `dynamodb/clinic_agent/clinic_email_messages.json`
 - `dynamodb/clinic_agent/clinic_patient_requests.json`
 - `dynamodb/clinic_agent/clinic_practice_members.json`
 - `dynamodb/clinic_agent/clinic_schedule.json`
@@ -129,9 +135,15 @@ Gmail:
 
 - User manually clicks `Scan Gmail`.
 - `scan_gmail_inbox` refreshes OAuth using the stored refresh token.
-- It lists recent Gmail messages matching clinic-oriented query terms, then
-  fetches full read-only message content for candidate messages so triage and
-  drafts can use the patient's original wording instead of snippets alone.
+- It lists recent inbox messages, then fetches full read-only message content
+  for candidate messages so triage and drafts can use the patient's original
+  wording instead of snippets alone.
+- It checks `clinic_email_messages` before drafting. Already-seen Gmail message
+  ids, repeated RFC message ids, and repeated normalized patient message
+  signatures are skipped or recorded as duplicates.
+- It resolves Gmail `threadId` against existing patient requests before
+  drafting. Replies in an existing thread reuse the existing
+  `patient_request_id`.
 - It filters out obvious non-patient messages, including newsletters, no-reply
   senders, promos, password resets, and marketing-style emails.
 - It stores the main request in `clinic_patient_requests` using
@@ -147,6 +159,12 @@ Gmail:
 - It upserts linked in-app action records in `clinic_actions` so the current
   Rounds and approval/audit flow continue to work. Scans do not delete durable
   open patient requests that fall out of the current Gmail result set.
+- If a patient reply in an existing thread contains an exact selected slot, the
+  app creates a new `confirm_booking` child action on the same
+  `patient_request_id`; this is what powers `Approve, send & book`.
+- If the patient only writes a time such as `4.30pm works`, the scanner tries to
+  resolve it against the request's previously proposed windows and only proceeds
+  when there is one clear match.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
 Approval:
@@ -159,8 +177,9 @@ Approval:
 - It does not send the final text anywhere.
 - For Gmail-sourced actions, the doctor can instead click `Approve & send
   Gmail`. This calls `approve_and_send_gmail`, sends the edited message through
-  Gmail, records the Gmail sent message id on the action, and marks the linked
-  patient request complete. This is the only current email-sending path.
+  Gmail, and records the Gmail sent message id on the action. If the sent reply
+  contains proposed availability windows, the linked request moves to
+  `awaiting_patient_slot_selection` instead of `completed`.
 - For Gmail-sourced scheduling replies with an exact patient-selected slot, the
   doctor can click `Approve, send & book`. This calls
   `approve_send_and_book_calendar`, verifies the slot against live Google

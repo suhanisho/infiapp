@@ -1,0 +1,33 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "practice_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "gmail_message_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "body_excerpt": "String",
+    "classification": "String",
+    "direction": "String",
+    "from_email": "String",
+    "from_name": "String",
+    "gmail_message_id": "String",
+    "gmail_thread_id": "String",
+    "in_reply_to": "String",
+    "message_id_header": "String",
+    "message_signature": "String",
+    "patient_id": "String",
+    "patient_request_id": "String",
+    "practice_id": "String",
+    "processed_at": "String",
+    "received_at": "String",
+    "references": "String",
+    "source_provider": "String",
+    "subject": "String",
+    "to_email": "String"
+  }
+}

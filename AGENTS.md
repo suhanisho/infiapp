@@ -29,7 +29,8 @@ The most important product rule is explicit approval before external action.
   state, but does not call Gmail or Calendar.
 - `Approve & send Gmail` is the send-only path. It sends the edited reply
   through Gmail after an explicit confirmation, then records the Gmail sent
-  message id for audit.
+  message id for audit. If the reply proposes availability windows, the linked
+  request should wait in `awaiting_patient_slot_selection`.
 - `Approve, send & book` is the explicit Calendar booking path. It verifies an
   exact patient-selected slot against Google Calendar, creates the event, sends
   the edited Gmail confirmation, and records both external IDs for audit.
@@ -62,6 +63,11 @@ The most important product rule is explicit approval before external action.
   request.
 - `clinic_actions` stores child actions linked to `patient_request_id`, so one
   patient request can later support multiple actions.
+- Gmail messages are events inside a request. Use Gmail `threadId` and
+  `clinic_email_messages` to avoid duplicate requests and to attach patient
+  replies to the existing `patient_request_id`.
+- `clinic_email_messages` records processed inbound/outbound Gmail messages for
+  idempotency, duplicate detection, thread continuity, and audit.
 
 ## Google Integration Rules
 
@@ -86,7 +92,8 @@ Gmail sending must:
 - send the edited final message, not an unreviewed draft
 - reply in the source Gmail thread when source thread/message ids are present
 - record `external_sent_message_id`
-- mark the linked patient request completed when relevant
+- mark the linked patient request completed when relevant, but leave slot
+  proposals waiting for patient selection
 
 Calendar writes must:
 

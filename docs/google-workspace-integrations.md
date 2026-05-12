@@ -27,6 +27,8 @@ external writes are deliberately approval-gated.
   external calendar/event IDs.
 - `clinic_patient_requests` is the main durable entity for Gmail-derived
   patient requests. It is keyed by `practice_id + patient_request_id`.
+- `clinic_email_messages` stores processed inbound/outbound Gmail messages for
+  idempotency, duplicate detection, and thread continuity.
 - `clinic_actions` stores child approval/audit records linked by
   `patient_request_id`; action IDs are separate so one request can support
   multiple future actions.
@@ -42,19 +44,24 @@ external writes are deliberately approval-gated.
   Secrets Manager and records connection metadata in `clinic_integrations`.
 - `sync_google_calendar` refreshes the OAuth token, reads Google Calendar
   events for the next sync window, and refreshes the local schedule cache.
-- `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail metadata and
-  snippets matching clinic keywords, and upserts patient requests plus in-app
-  action drafts. It does not delete durable open requests that are absent from a
-  later scan. For scheduling requests such as meet-and-greet or initial
+- `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail messages,
+  checks the Gmail message ledger, resolves Gmail threads into existing patient
+  requests where possible, and upserts patient requests plus in-app action
+  drafts. It does not delete durable open requests that are absent from a later
+  scan. For scheduling requests such as meet-and-greet or initial
   consultation messages, draft replies include availability windows from the
   local Google Calendar cache, filtered by patient preferences in the email such
   as weekdays, next week, morning/afternoon, or after/before time constraints.
+- If the patient replies in the same Gmail thread with an exact preferred slot,
+  the app keeps the same `patient_request_id` and creates a `confirm_booking`
+  action instead of another first-contact availability draft.
 - Unknown senders are filtered conservatively. Automated, newsletter, and
   marketing-style messages are ignored unless they look like direct clinic or
   patient scheduling messages.
 - `approve_and_send_gmail` sends the edited reply into the source Gmail thread
   only after the doctor clicks the send-specific approval button. It records the
-  sent Gmail message id on the action for audit.
+  sent Gmail message id on the action for audit. Slot proposal replies leave the
+  request in `awaiting_patient_slot_selection`.
 - `approve_send_and_book_calendar` verifies an exact requested slot against
   live Google Calendar, creates the Calendar event with `sendUpdates=none`,
   sends the edited Gmail confirmation, and records both external IDs for audit.

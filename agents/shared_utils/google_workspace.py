@@ -228,6 +228,7 @@ class GoogleWorkspaceHttpClient:
                 ("metadataHeaders", "Subject"),
                 ("metadataHeaders", "Date"),
                 ("metadataHeaders", "Message-ID"),
+                ("metadataHeaders", "In-Reply-To"),
                 ("metadataHeaders", "References"),
             ],
         )

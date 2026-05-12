@@ -78,6 +78,37 @@ class ClinicActionsPage(TypedDict):
     next_key: dict[str, Any] | None
 
 
+class ClinicEmailMessagesItem(TypedDict):
+    """Typed representation of a row in the clinic_email_messages table."""
+
+    body_excerpt: str
+    classification: str
+    direction: str
+    from_email: str
+    from_name: str
+    gmail_message_id: str
+    gmail_thread_id: str
+    in_reply_to: str
+    message_id_header: str
+    message_signature: str
+    patient_id: str
+    patient_request_id: str
+    practice_id: str
+    processed_at: str
+    received_at: str
+    references: str
+    source_provider: str
+    subject: str
+    to_email: str
+
+
+class ClinicEmailMessagesPage(TypedDict):
+    """Paginated query result for the clinic_email_messages table."""
+
+    items: list[ClinicEmailMessagesItem]
+    next_key: dict[str, Any] | None
+
+
 class ClinicIntegrationsItem(TypedDict):
     """Typed representation of a row in the clinic_integrations table."""
 
@@ -281,6 +312,39 @@ CLINIC_ACTIONS_TABLE: dict[str, Any] = {
     "table_name": "clinic_actions",
 }
 
+CLINIC_EMAIL_MESSAGES_TABLE: dict[str, Any] = {
+    "attributes": {
+        "body_excerpt": "String",
+        "classification": "String",
+        "direction": "String",
+        "from_email": "String",
+        "from_name": "String",
+        "gmail_message_id": "String",
+        "gmail_thread_id": "String",
+        "in_reply_to": "String",
+        "message_id_header": "String",
+        "message_signature": "String",
+        "patient_id": "String",
+        "patient_request_id": "String",
+        "practice_id": "String",
+        "processed_at": "String",
+        "received_at": "String",
+        "references": "String",
+        "source_provider": "String",
+        "subject": "String",
+        "to_email": "String",
+    },
+    "partition_key": {
+        "name": "practice_id",
+        "type": "String",
+    },
+    "sort_key": {
+        "name": "gmail_message_id",
+        "type": "String",
+    },
+    "table_name": "clinic_email_messages",
+}
+
 CLINIC_INTEGRATIONS_TABLE: dict[str, Any] = {
     "attributes": {
         "account_email": "String",
@@ -460,6 +524,7 @@ CLINIC_SETTINGS_TABLE: dict[str, Any] = {
 
 TABLES: dict[str, dict[str, Any]] = {
     "clinic_actions": CLINIC_ACTIONS_TABLE,
+    "clinic_email_messages": CLINIC_EMAIL_MESSAGES_TABLE,
     "clinic_integrations": CLINIC_INTEGRATIONS_TABLE,
     "clinic_patient_requests": CLINIC_PATIENT_REQUESTS_TABLE,
     "clinic_patients": CLINIC_PATIENTS_TABLE,
@@ -599,6 +664,144 @@ def query_clinic_actions(
 ) -> list[ClinicActionsItem]:
     return query_clinic_actions_by_action_id_range(
         clinic_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )
+
+
+
+def put_clinic_email_messages(
+    item: ClinicEmailMessagesItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
+
+
+def get_clinic_email_messages(
+    practice_id: Any,
+    gmail_message_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicEmailMessagesItem | None:
+    response = _table(
+        CLINIC_EMAIL_MESSAGES_TABLE,
+        dynamodb_resource,
+    ).get_item(
+        Key=_build_key(
+            CLINIC_EMAIL_MESSAGES_TABLE,
+            practice_id,
+            gmail_message_id,
+        )
+    )
+    item = response.get("Item")
+    return cast(ClinicEmailMessagesItem, item) if isinstance(item, dict) else None
+
+
+def query_clinic_email_messages_item(
+    practice_id: Any,
+    gmail_message_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicEmailMessagesItem | None:
+    return get_clinic_email_messages(
+        practice_id,
+        gmail_message_id,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+
+def delete_clinic_email_messages(
+    practice_id: Any,
+    gmail_message_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                CLINIC_EMAIL_MESSAGES_TABLE,
+                practice_id,
+                gmail_message_id,
+            )
+        ),
+    )
+
+
+def query_clinic_email_messages_by_gmail_message_id_range_page(
+    practice_id: Any,
+    *,
+    start_gmail_message_id: Any | None = None,
+    end_gmail_message_id: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> ClinicEmailMessagesPage:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("practice_id").eq(practice_id)
+    if start_gmail_message_id is not None and end_gmail_message_id is not None:
+        key_condition = key_condition & Key("gmail_message_id").between(start_gmail_message_id, end_gmail_message_id)
+    elif start_gmail_message_id is not None:
+        key_condition = key_condition & Key("gmail_message_id").gte(start_gmail_message_id)
+    elif end_gmail_message_id is not None:
+        key_condition = key_condition & Key("gmail_message_id").lte(end_gmail_message_id)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).query(**query_args)
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(ClinicEmailMessagesItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_clinic_email_messages_by_gmail_message_id_range(
+    practice_id: Any,
+    *,
+    start_gmail_message_id: Any | None = None,
+    end_gmail_message_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicEmailMessagesItem]:
+    return query_clinic_email_messages_by_gmail_message_id_range_page(
+        practice_id,
+        start_gmail_message_id=start_gmail_message_id,
+        end_gmail_message_id=end_gmail_message_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
+
+
+def query_clinic_email_messages(
+    practice_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicEmailMessagesItem]:
+    return query_clinic_email_messages_by_gmail_message_id_range(
+        practice_id,
         dynamodb_resource=dynamodb_resource,
         scan_index_forward=scan_index_forward,
         consistent_read=consistent_read,
