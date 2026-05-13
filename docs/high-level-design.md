@@ -376,6 +376,14 @@ Current Gmail behavior:
 - If the reply only says something like `4.30pm works`, the app can resolve that
   against the previously proposed availability windows when there is a single
   unambiguous match.
+- Historical source messages from existing request threads are recorded in the
+  Gmail message ledger but do not overwrite the current request state. This
+  prevents old source emails from erasing proposed windows before a newer
+  patient slot-selection reply is processed.
+- Availability windows are only proposed when the message clearly asks to book,
+  reschedule, or choose an appointment. Patient questions about results,
+  prescriptions, symptoms, or general next steps receive contextual review
+  drafts instead of generic appointment slots.
 - Does not send email.
 - Does not create Gmail drafts.
 - Does not label, archive, or mutate Gmail messages.

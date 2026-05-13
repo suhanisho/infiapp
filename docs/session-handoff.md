@@ -165,6 +165,13 @@ Gmail:
 - If the patient only writes a time such as `4.30pm works`, the scanner tries to
   resolve it against the request's previously proposed windows and only proceeds
   when there is one clear match.
+- Historical source messages from already-known Gmail threads are recorded in
+  `clinic_email_messages` but skipped for request updates, so they do not erase
+  proposed windows before newer replies are processed.
+- The app should only propose Calendar availability when the message clearly has
+  scheduling intent. Result questions, prescription/admin requests, symptom
+  questions, and general next-step questions should get contextual review drafts
+  instead of generic meeting-slot replies.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
 Approval:

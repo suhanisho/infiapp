@@ -927,6 +927,40 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(start_at.hour, 16)
         self.assertEqual(start_at.minute, 30)
 
+    def test_patient_question_does_not_get_generic_slots(self) -> None:
+        body = "Hello, I am worried about my recent scan report and wanted to ask what the next steps are."
+        encoded_body = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
+        message = {
+            "id": "gmail-message-question-1",
+            "threadId": "gmail-thread-question-1",
+            "internalDate": "1778067600000",
+            "snippet": body,
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_body},
+                "headers": [
+                    {"name": "From", "value": "Maya Patient <maya@example.com>"},
+                    {"name": "Subject", "value": "Question about scan report"},
+                ],
+            },
+        }
+
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=["Should not be used"]) as suggest:
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-13T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        self.assertEqual(request_item["request_type"], "test_report_result_query")
+        self.assertEqual(request_item["proposed_windows"], [])
+        self.assertNotIn("calendar", request_item["draft_message"].lower())
+        self.assertNotIn("windows currently look available", request_item["draft_message"])
+        self.assertIn("review the result context", request_item["draft_message"])
+        suggest.assert_not_called()
+
     def test_existing_thread_slot_reply_reuses_patient_request_and_creates_booking_action(self) -> None:
         zone = handler_module._clinic_timezone()
         scan_date = datetime.now(zone).date() + timedelta(days=8)
@@ -988,6 +1022,83 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(action_item["metadata"]["action_kind"], handler_module.CONFIRM_BOOKING_ACTION_KIND)
         self.assertIn("gmail-message-live-2", action_item["action_id"])
         self.assertIn("is booked for", action_item["draft_message"])
+
+    def test_scan_skips_historical_source_before_matching_slot_reply(self) -> None:
+        zone = handler_module._clinic_timezone()
+        scan_date = datetime.now(zone).date() + timedelta(days=8)
+        source_message = FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0]
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            base_request = handler_module._gmail_message_to_patient_request_item(
+                source_message,
+                patient_by_email={},
+                synced_at="2026-05-12T10:00:00+00:00",
+            )
+        self.assertIsNotNone(base_request)
+        existing_request = cast(
+            Any,
+            {
+                **cast(Any, base_request),
+                "status": handler_module.AWAITING_PATIENT_SLOT_SELECTION_STATUS,
+                "updated_at": "2026-05-12T10:00:00+00:00",
+                "appointment_type": "Follow-up",
+                "duration_minutes": 20,
+                "proposed_windows": [
+                    f"{scan_date:%A} {scan_date.day} {scan_date:%b}, between 4:30 PM and 5:30 PM "
+                    "(20-minute Follow-up)"
+                ],
+            },
+        )
+        reply_body = "Thanks, 4.30pm works for me."
+        encoded_reply = base64.urlsafe_b64encode(reply_body.encode("utf-8")).decode("utf-8").rstrip("=")
+        reply_message = {
+            "id": "gmail-message-live-2",
+            "threadId": existing_request["source_thread_id"],
+            "internalDate": str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp() * 1000)),
+            "snippet": reply_body,
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_reply},
+                "headers": [
+                    {"name": "From", "value": "Rachel Davies <rachel.d@gmail.com>"},
+                    {"name": "Subject", "value": "Re: Appointment request"},
+                ],
+            },
+        }
+
+        class ThreadReplyGoogleClient(FakeGoogleClient):
+            def list_gmail_message_metadata(self, *, query: str, max_results: int = 10) -> list[dict[str, Any]]:
+                _ = (query, max_results)
+                return [source_message, reply_message]
+
+        with (
+            patch.object(
+                handler_module,
+                "_google_client_for_integration",
+                return_value=({**handler_module.SEED_INTEGRATIONS[1], "token_secret_id": "secret"}, ThreadReplyGoogleClient()),
+            ),
+            patch.object(handler_module, "_patient_lookup_by_email", return_value={}),
+            patch.object(handler_module, "query_clinic_email_messages", return_value=[]),
+            patch.object(handler_module, "query_clinic_patient_requests", return_value=[existing_request]),
+            patch.object(handler_module, "get_clinic_email_messages", return_value=None),
+            patch.object(handler_module, "put_clinic_email_messages"),
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+            patch.object(
+                handler_module,
+                "_upsert_gmail_request_candidates",
+                side_effect=lambda items: [handler_module._patient_request_to_action_item(item) for item in items],
+            ),
+            patch.object(handler_module, "_mark_integration_success"),
+        ):
+            response = lambda_handler({"action": "scan_gmail_inbox"})
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["proposedActions"], 1)
+        action = body["actions"][0]
+        self.assertEqual(action["patientRequestId"], existing_request["patient_request_id"])
+        self.assertEqual(action["metadata"]["action_kind"], handler_module.CONFIRM_BOOKING_ACTION_KIND)
+        self.assertTrue(action["metadata"]["booking_candidate_available"])
 
     def test_gmail_scan_dedupes_repeated_patient_message(self) -> None:
         first_message = FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0]

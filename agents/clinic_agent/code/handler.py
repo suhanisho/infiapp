@@ -2440,6 +2440,31 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
+def _has_scheduling_intent(text: str) -> bool:
+    lowered = text.lower()
+    if _contains_any(lowered, BOOKING_PHRASES):
+        return True
+    if _contains_any(
+        lowered,
+        (
+            "appointment",
+            "consultation",
+            "reschedule",
+            "cancel",
+            "meet & greet",
+            "meet and greet",
+            "slot",
+            "availability",
+            "available",
+        ),
+    ):
+        return True
+    return re.search(
+        r"\b(?:book|schedule|arrange|reschedule|cancel|move)\b",
+        lowered,
+    ) is not None
+
+
 def _is_clinic_message(
     *,
     headers: dict[str, str],
@@ -2492,6 +2517,7 @@ def _infer_gmail_action_type(text: str) -> tuple[str, str]:
 def _triage_gmail_request(text: str, *, matched_patient: bool) -> TriageResult:
     lowered = text.lower()
     emotional_tone = "anxious_or_frustrated" if _contains_any(lowered, ANXIOUS_TONE_TERMS) else "neutral"
+    has_scheduling_intent = _has_scheduling_intent(lowered)
 
     if _contains_any(lowered, URGENT_CLINICAL_TERMS):
         return {
@@ -2582,12 +2608,32 @@ def _triage_gmail_request(text: str, *, matched_patient: bool) -> TriageResult:
             "request_type": "follow_up",
             "urgency_level": "routine",
             "risk_level": "low",
-            "requires_doctor_review": False,
-            "suggested_next_action": "Review the follow-up draft and decide the next admin step.",
+            "requires_doctor_review": not has_scheduling_intent,
+            "suggested_next_action": (
+                "Review proposed availability windows and approve the reply text."
+                if has_scheduling_intent
+                else "Review the patient's follow-up question before any reply is sent."
+            ),
             "patient_emotional_tone": emotional_tone,
             "triage_confidence": _dynamodb_decimal("0.80"),
-            "triage_reason": "Message appears to ask about follow-up or next steps.",
-            "action_priority": "info",
+            "triage_reason": (
+                "Message appears to ask for follow-up scheduling."
+                if has_scheduling_intent
+                else "Message appears to ask about follow-up or next steps, but does not clearly request scheduling."
+            ),
+            "action_priority": "new" if has_scheduling_intent else "clinical",
+        }
+    if not has_scheduling_intent:
+        return {
+            "request_type": "general_patient_question",
+            "urgency_level": "routine",
+            "risk_level": "medium" if matched_patient else "low",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Review the patient's question and approve a contextual response.",
+            "patient_emotional_tone": emotional_tone,
+            "triage_confidence": _dynamodb_decimal("0.74") if matched_patient else _dynamodb_decimal("0.64"),
+            "triage_reason": "Message looks patient-related but does not clearly ask to book, reschedule, or choose an appointment slot.",
+            "action_priority": "clinical" if matched_patient else "admin",
         }
     return {
         "request_type": "appointment_request",
@@ -3457,6 +3503,26 @@ def _draft_reply_for_message(
             "Warm regards,\n"
             "Dr. Shalini's Clinic"
         )
+    if triage and triage["request_type"] in {
+        "routine_clinical_question",
+        "test_report_result_query",
+        "prescription_admin_request",
+        "general_patient_question",
+    }:
+        context_note = _reply_summary_note(summary)
+        if triage["request_type"] == "test_report_result_query":
+            next_sentence = "Dr. Shalini will review the result context before we reply in detail."
+        elif triage["request_type"] == "prescription_admin_request":
+            next_sentence = "Dr. Shalini will review the request and we will come back with the appropriate next step."
+        else:
+            next_sentence = "Dr. Shalini will review your question and we will come back to you shortly."
+        return (
+            f"Dear {first_name},\n\n"
+            f"Thank you for your message.{context_note}\n\n"
+            f"{next_sentence}\n\n"
+            "Warm regards,\n"
+            "Dr. Shalini's Clinic"
+        )
 
     request_focus = _request_focus_phrase(request_text, appointment_kind)
     summary_note = _reply_summary_note(summary)
@@ -3497,6 +3563,24 @@ def _draft_reply_for_message(
         "Warm regards,\n"
         "Dr. Shalini's Clinic"
     )
+
+
+def _should_offer_availability_windows(
+    *,
+    triage: TriageResult,
+    request_text: str,
+    existing_request: ClinicPatientRequestsItem | None,
+    booking_candidate: BookingCandidate | None,
+) -> bool:
+    if existing_request is not None:
+        return False
+    if triage["risk_level"] == "high":
+        return False
+    if booking_candidate is not None and booking_candidate["available"]:
+        return False
+    if triage["request_type"] not in {"appointment_request", "reschedule_cancellation", "follow_up"}:
+        return False
+    return _has_scheduling_intent(request_text)
 
 
 def _slot_constraints_record(constraints: SlotConstraints) -> dict[str, Any]:
@@ -3681,13 +3765,18 @@ def _gmail_message_to_patient_request_item(
                 "action_priority": "action",
             }
     slot_labels = (
-        []
-        if existing_request is not None or triage["risk_level"] == "high" or (booking_candidate is not None and booking_candidate["available"])
-        else _suggest_free_slot_labels(
+        _suggest_free_slot_labels(
             appointment_kind=appointment_kind,
             duration_minutes=duration_minutes,
             constraints=constraints,
         )
+        if _should_offer_availability_windows(
+            triage=triage,
+            request_text=request_text,
+            existing_request=existing_request,
+            booking_candidate=booking_candidate,
+        )
+        else []
     )
     slot_labels = _filter_slot_labels_by_constraints(slot_labels, constraints)
     patient_request_id = (
@@ -3791,6 +3880,8 @@ def _merge_patient_request_candidate(
         for key in ("approved_at", "approved_by", "completed_at", "completion_note", "final_message"):
             if existing_data.get(key):
                 merged_data[key] = existing_data[key]
+    if is_thread_continuation and not incoming["proposed_windows"] and existing_data.get("proposed_windows"):
+        merged["proposed_windows"] = cast(list[Any], existing_data["proposed_windows"])
     return merged
 
 
@@ -3927,6 +4018,26 @@ def _scan_gmail_inbox() -> dict[str, Any]:
                 if context["gmail_thread_id"]
                 else requests_by_source_message.get(context["gmail_message_id"])
             )
+            if existing_request is not None:
+                existing_updated_at = _parse_sort_datetime(existing_request.get("updated_at"))
+                if (
+                    context["gmail_message_id"] == existing_request["source_message_id"]
+                    or context["received_at"] <= existing_updated_at
+                ):
+                    historical_item = _message_record_item(
+                        context,
+                        patient_request_id=existing_request["patient_request_id"],
+                        patient_id=existing_request["patient_id"],
+                        classification="historical_request_message",
+                        processed_at=synced_at,
+                    )
+                    message_records.append(historical_item)
+                    messages_by_id[historical_item["gmail_message_id"]] = historical_item
+                    if historical_item["message_id_header"]:
+                        messages_by_header_id[historical_item["message_id_header"]] = historical_item
+                    if historical_item["message_signature"]:
+                        messages_by_signature[historical_item["message_signature"]] = historical_item
+                    continue
             item = _gmail_message_to_patient_request_item(
                 message,
                 patient_by_email=patient_by_email,
