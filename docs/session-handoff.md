@@ -169,6 +169,9 @@ Gmail:
 - If the patient only writes a time such as `4.30pm works`, the scanner tries to
   resolve it against the request's previously proposed windows and only proceeds
   when there is one clear match.
+- If the patient starts a fresh Gmail thread from the same sender email, the
+  scanner can attach it to a single waiting request when the selected time
+  clearly matches that request's proposed windows.
 - Historical source messages from already-known Gmail threads are recorded in
   `clinic_email_messages` but skipped for request updates, so they do not erase
   proposed windows before newer replies are processed.

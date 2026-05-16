@@ -385,6 +385,9 @@ Current Gmail behavior:
 - If the reply only says something like `4.30pm works`, the app can resolve that
   against the previously proposed availability windows when there is a single
   unambiguous match.
+- If a patient starts a fresh Gmail thread but uses the same sender email and
+  clearly picks a time from exactly one open request's proposed windows, the app
+  can still attach that reply to the waiting `patient_request_id`.
 - Historical source messages from existing request threads are recorded in the
   Gmail message ledger but do not overwrite the current request state. This
   prevents old source emails from erasing proposed windows before a newer

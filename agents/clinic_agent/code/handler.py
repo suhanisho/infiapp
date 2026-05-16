@@ -2265,6 +2265,28 @@ def _gmail_message_text(message: dict[str, Any]) -> str:
     return _truncate(html.unescape(str(message.get("snippet") or "")), 4000)
 
 
+def _gmail_visible_reply_text(value: str) -> str:
+    text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    text = re.split(
+        r"(?im)\n\s*(?:on .+?wrote:|from:\s+.+|sent:\s+.+|to:\s+.+|subject:\s+.+|[-]+original message[-]+)",
+        text,
+        maxsplit=1,
+    )[0]
+    visible_lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if re.match(r"(?i)^on .+ wrote:$", stripped):
+            break
+        if stripped.startswith(">"):
+            break
+        if visible_lines and re.match(r"(?i)^(from|sent|to|subject):\s+", stripped):
+            break
+        visible_lines.append(line)
+    return _truncate("\n".join(visible_lines).strip(), 4000)
+
+
 def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) -> datetime:
     raw_internal_date = message.get("internalDate")
     if isinstance(raw_internal_date, str) and raw_internal_date.isdigit():
@@ -2497,6 +2519,36 @@ def _message_indexes(
         if message["message_signature"]:
             by_signature[message["message_signature"]] = message
     return by_gmail_id, by_header_id, by_signature
+
+
+def _awaiting_slot_request_for_sender_reply(
+    context: GmailMessageContext,
+    patient_requests: list[ClinicPatientRequestsItem],
+) -> ClinicPatientRequestsItem | None:
+    sender_email = context["sender_email"].strip().lower()
+    if not sender_email:
+        return None
+    reply_text = f"{context['subject']} {_gmail_visible_reply_text(context['message_text']) or context['message_text']}"
+    matches: list[ClinicPatientRequestsItem] = []
+    for request in patient_requests:
+        if request["status"] != AWAITING_PATIENT_SLOT_SELECTION_STATUS:
+            continue
+        if request["patient_email"].strip().lower() != sender_email:
+            continue
+        if not request["proposed_windows"]:
+            continue
+        duration_minutes = int(request["duration_minutes"] or 30)
+        candidate = _booking_candidate_from_proposed_windows_reply(
+            reply_text,
+            request["proposed_windows"],
+            request["appointment_type"],
+            duration_minutes,
+        )
+        if candidate is not None:
+            matches.append(request)
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -3275,6 +3327,75 @@ def _time_mentions_with_spans(text: str) -> list[TimeMention]:
     return mentions
 
 
+def _append_time_mention(
+    mentions: list[TimeMention],
+    seen_mentions: set[tuple[int, int, time]],
+    *,
+    start: int,
+    end: int,
+    raw_hour: str,
+    raw_minute: str = "00",
+    suffix: str = "",
+) -> None:
+    try:
+        minute = int(raw_minute)
+    except ValueError:
+        return
+    if minute < 0 or minute > 59:
+        return
+    parsed = _text_hour_to_time(raw_hour, suffix)
+    if parsed is None:
+        return
+    value = parsed.replace(minute=minute)
+    key = (start, end, value)
+    if key in seen_mentions:
+        return
+    mentions.append({"value": value, "start": start, "end": end})
+    seen_mentions.add(key)
+
+
+def _booking_reply_time_mentions_with_spans(text: str) -> list[TimeMention]:
+    normalized = _normalized_clock_text(text)
+    mentions = _time_mentions_with_spans(normalized)
+    seen_mentions = {(mention["start"], mention["end"], mention["value"]) for mention in mentions}
+
+    for match in re.finditer(r"\b(?:at\s+)?(\d{1,2})[:.](\d{2})\b(?!\s*(?:am|pm)\b)", normalized, flags=re.IGNORECASE):
+        _append_time_mention(
+            mentions,
+            seen_mentions,
+            start=match.start(),
+            end=match.end(),
+            raw_hour=match.group(1),
+            raw_minute=match.group(2),
+        )
+
+    bare_hour_pattern = re.compile(
+        r"\b(?:at|for|around|about|take|book|do|prefer|preferred)\s+(\d{1,2})\b(?!\s*(?:[:.]\d|\d))|"
+        r"\b(\d{1,2})\b(?!\s*(?:[:.]\d|\d))\s*"
+        r"(?:works|suits|is fine|is ok|is okay|would work|would be good|please)\b",
+        flags=re.IGNORECASE,
+    )
+    for match in bare_hour_pattern.finditer(normalized):
+        raw_hour = match.group(1) or match.group(2) or ""
+        if not raw_hour:
+            continue
+        try:
+            hour = int(raw_hour)
+        except ValueError:
+            continue
+        if hour < 1 or hour > 12:
+            continue
+        _append_time_mention(
+            mentions,
+            seen_mentions,
+            start=match.start(),
+            end=match.end(),
+            raw_hour=raw_hour,
+        )
+
+    return sorted(mentions, key=lambda mention: mention["start"])
+
+
 def _clock_mentions(text: str) -> list[time]:
     return [mention["value"] for mention in _time_mentions_with_spans(text)]
 
@@ -3513,7 +3634,7 @@ def _booking_start_from_text(text: str) -> datetime | None:
     zone = _clinic_timezone()
     today = datetime.now(zone).date()
     date_mentions = _date_mentions_with_spans(normalized.lower(), today)
-    time_mentions = _time_mentions_with_spans(normalized)
+    time_mentions = _booking_reply_time_mentions_with_spans(normalized)
     scored_candidates: list[tuple[int, datetime]] = []
 
     for time_mention in time_mentions:
@@ -3699,8 +3820,8 @@ def _booking_candidate_from_proposed_windows_reply(
     appointment_kind: str,
     duration_minutes: int,
 ) -> BookingCandidate | None:
-    normalized = _normalized_clock_text(text)
-    time_mentions = _time_mentions_with_spans(normalized)
+    normalized = _normalized_clock_text(_gmail_visible_reply_text(text) or text)
+    time_mentions = _booking_reply_time_mentions_with_spans(normalized)
     if not time_mentions:
         return None
 
@@ -4109,7 +4230,8 @@ def _gmail_message_to_patient_request_item(
 
     subject = context["subject"]
     summary = context["summary"]
-    request_text = f"{subject} {context['message_text']}"
+    visible_message_text = _gmail_visible_reply_text(context["message_text"]) or context["message_text"]
+    request_text = f"{subject} {visible_message_text}"
     intent, _ = _infer_gmail_action_type(request_text)
     triage = _triage_gmail_request(request_text, matched_patient=matched_patient is not None)
     detected_appointment_kind, detected_duration_minutes = _request_appointment_details(request_text)
@@ -4488,6 +4610,8 @@ def _scan_gmail_inbox() -> dict[str, Any]:
                 if context["gmail_thread_id"]
                 else requests_by_source_message.get(context["gmail_message_id"])
             )
+            if existing_request is None:
+                existing_request = _awaiting_slot_request_for_sender_reply(context, patient_requests)
             if existing_request is not None:
                 existing_updated_at = _parse_sort_datetime(existing_request.get("updated_at"))
                 if (
