@@ -380,6 +380,9 @@ Current Gmail behavior:
   Gmail message ledger but do not overwrite the current request state. This
   prevents old source emails from erasing proposed windows before a newer
   patient slot-selection reply is processed.
+- Legacy `new_request` and `thread_reply` ledger records may be re-triaged
+  while the linked request is still open, which lets the app repair stale
+  generic drafts from an earlier classifier pass.
 - Availability windows are only proposed when the message clearly asks to book,
   reschedule, or choose an appointment. Patient questions about results,
   prescriptions, symptoms, or general next steps receive contextual review

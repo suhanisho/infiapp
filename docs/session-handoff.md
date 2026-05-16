@@ -168,6 +168,10 @@ Gmail:
 - Historical source messages from already-known Gmail threads are recorded in
   `clinic_email_messages` but skipped for request updates, so they do not erase
   proposed windows before newer replies are processed.
+- Legacy `new_request` and `thread_reply` ledger records from the first
+  conversation-model deploy can be re-triaged while the linked request is still
+  open, so stale generic drafts can be corrected without manually deleting
+  ledger rows.
 - The app should only propose Calendar availability when the message clearly has
   scheduling intent. Result questions, prescription/admin requests, symptom
   questions, and general next-step questions should get contextual review drafts

@@ -2408,17 +2408,32 @@ def _prefer_conversation_request(
 
 def _request_indexes(
     requests: list[ClinicPatientRequestsItem],
-) -> tuple[dict[str, ClinicPatientRequestsItem], dict[str, ClinicPatientRequestsItem]]:
+) -> tuple[dict[str, ClinicPatientRequestsItem], dict[str, ClinicPatientRequestsItem], dict[str, ClinicPatientRequestsItem]]:
+    by_id: dict[str, ClinicPatientRequestsItem] = {}
     by_thread: dict[str, ClinicPatientRequestsItem] = {}
     by_source_message: dict[str, ClinicPatientRequestsItem] = {}
     for request in requests:
+        by_id[request["patient_request_id"]] = request
         thread_id = request["source_thread_id"].strip()
         if thread_id:
             by_thread[thread_id] = _prefer_conversation_request(by_thread.get(thread_id), request)
         source_message_id = request["source_message_id"].strip()
         if source_message_id:
             by_source_message[source_message_id] = request
-    return by_thread, by_source_message
+    return by_id, by_thread, by_source_message
+
+
+def _should_reprocess_legacy_message(
+    message_record: ClinicEmailMessagesItem,
+    requests_by_id: dict[str, ClinicPatientRequestsItem],
+) -> bool:
+    classification = message_record["classification"]
+    if classification not in {"new_request", "thread_reply"}:
+        return False
+    request = requests_by_id.get(message_record["patient_request_id"])
+    if request is None:
+        return False
+    return request["status"] not in COMPLETED_STATUSES
 
 
 def _message_indexes(
@@ -3973,7 +3988,7 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         email_messages = _list_email_message_items()
         messages_by_id, messages_by_header_id, messages_by_signature = _message_indexes(email_messages)
         patient_requests = _list_patient_request_items()
-        requests_by_thread, requests_by_source_message = _request_indexes(patient_requests)
+        requests_by_id, requests_by_thread, requests_by_source_message = _request_indexes(patient_requests)
         synced_at = _now()
         request_items_by_id: dict[str, ClinicPatientRequestsItem] = {}
         message_records: list[ClinicEmailMessagesItem] = []
@@ -3988,13 +4003,17 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         messages_by_context_id = {context["gmail_message_id"]: message for context, message in message_pairs}
 
         for context in sorted(message_contexts, key=lambda item: item["received_at"]):
-            if context["gmail_message_id"] in messages_by_id:
+            existing_message_record = messages_by_id.get(context["gmail_message_id"])
+            if existing_message_record is not None and not _should_reprocess_legacy_message(
+                existing_message_record,
+                requests_by_id,
+            ):
                 continue
 
             duplicate_record = (
                 messages_by_header_id.get(context["message_id_header"]) if context["message_id_header"] else None
             ) or messages_by_signature.get(context["message_signature"])
-            if duplicate_record is not None:
+            if duplicate_record is not None and duplicate_record["gmail_message_id"] != context["gmail_message_id"]:
                 duplicate_item = _message_record_item(
                     context,
                     patient_request_id=duplicate_record["patient_request_id"],
@@ -4047,17 +4066,17 @@ def _scan_gmail_inbox() -> dict[str, Any]:
             if item is None:
                 continue
             request_items_by_id[item["patient_request_id"]] = item
+            requests_by_id[item["patient_request_id"]] = item
             if item["source_thread_id"]:
                 requests_by_thread[item["source_thread_id"]] = item
             if item["source_message_id"]:
                 requests_by_source_message[item["source_message_id"]] = item
 
-            conversation_stage = str(item["request_constraints"].get("conversation_stage", "new_request"))
             message_record = _message_record_item(
                 context,
                 patient_request_id=item["patient_request_id"],
                 patient_id=item["patient_id"],
-                classification=conversation_stage,
+                classification=item["request_type"],
                 processed_at=synced_at,
             )
             message_records.append(message_record)
