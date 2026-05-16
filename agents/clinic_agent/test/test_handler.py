@@ -139,6 +139,13 @@ def trusted_actor_fields(email: str, secret: str = "test-internal-secret") -> di
 
 
 class ClinicAgentTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._llm_env_patch = patch.dict(handler_module.os.environ, {"CLINIC_LLM_ENABLED": "false"})
+        self._llm_env_patch.start()
+
+    def tearDown(self) -> None:
+        self._llm_env_patch.stop()
+
     def test_lists_seed_actions_when_table_is_empty(self) -> None:
         with (
             patch.object(handler_module, "query_clinic_actions", return_value=[]),
@@ -960,6 +967,149 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertNotIn("windows currently look available", request_item["draft_message"])
         self.assertIn("review the result context", request_item["draft_message"])
         suggest.assert_not_called()
+
+    def test_llm_review_classifies_patient_question_and_writes_contextual_draft(self) -> None:
+        body = "Hello, I had my scan yesterday and I am worried about what the report means."
+        encoded_body = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
+        message = {
+            "id": "gmail-message-llm-question",
+            "threadId": "gmail-thread-llm-question",
+            "internalDate": "1778067600000",
+            "snippet": body,
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_body},
+                "headers": [
+                    {"name": "From", "value": "Maya Patient <maya@example.com>"},
+                    {"name": "Subject", "value": "Worried after scan"},
+                ],
+            },
+        }
+        llm_review = {
+            "is_patient_relevant": True,
+            "request_type": "test_report_result_query",
+            "urgency_level": "soon",
+            "risk_level": "medium",
+            "requires_doctor_review": True,
+            "suggested_next_action": "Doctor should review the scan context before replying.",
+            "patient_emotional_tone": "anxious_or_frustrated",
+            "triage_confidence": Decimal("0.91"),
+            "triage_reason": "The patient is asking about a scan report and sounds worried.",
+            "action_priority": "clinical",
+            "should_offer_availability": False,
+            "draft_message": (
+                "Dear Maya,\n\n"
+                "Thank you for your message. I can understand why the report wording feels worrying. "
+                "Dr. Shalini will review the scan context before we reply in detail.\n\n"
+                "Warm regards,\n"
+                "Dr. Shalini's Clinic"
+            ),
+            "ignored_reason": "",
+            "model": "test-model",
+        }
+
+        with (
+            patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
+            patch.object(handler_module, "_suggest_free_slot_labels", return_value=["Should not be offered"]),
+            patch.object(
+                handler_module,
+                "_llm_review_gmail_message",
+                return_value={"review": llm_review, "status": "used", "model": "test-model", "error": ""},
+            ),
+        ):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-13T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        self.assertEqual(request_item["request_type"], "test_report_result_query")
+        self.assertEqual(request_item["patient_emotional_tone"], "anxious_or_frustrated")
+        self.assertEqual(request_item["proposed_windows"], [])
+        self.assertIn("report wording feels worrying", request_item["draft_message"])
+        self.assertTrue(request_item["request_constraints"]["llm_draft_used"])
+        self.assertEqual(request_item["request_constraints"]["llm_review_status"], "used")
+
+    def test_llm_review_ignores_non_obvious_non_patient_email(self) -> None:
+        body = "Could we discuss a partnership package for your practice next week?"
+        encoded_body = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
+        message = {
+            "id": "gmail-message-llm-ignore",
+            "threadId": "gmail-thread-llm-ignore",
+            "internalDate": "1778067600000",
+            "snippet": body,
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": encoded_body},
+                "headers": [
+                    {"name": "From", "value": "Alex Vendor <alex@example.com>"},
+                    {"name": "Subject", "value": "Partnership package"},
+                ],
+            },
+        }
+        llm_review = {
+            "is_patient_relevant": False,
+            "request_type": "non_patient",
+            "urgency_level": "routine",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "",
+            "patient_emotional_tone": "neutral",
+            "triage_confidence": Decimal("0.95"),
+            "triage_reason": "The message is a vendor partnership request, not patient care.",
+            "action_priority": "info",
+            "should_offer_availability": False,
+            "draft_message": "",
+            "ignored_reason": "Vendor outreach unrelated to patient care.",
+            "model": "test-model",
+        }
+
+        with (
+            patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
+            patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]),
+            patch.object(
+                handler_module,
+                "_llm_review_gmail_message",
+                return_value={"review": llm_review, "status": "used", "model": "test-model", "error": ""},
+            ),
+        ):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                message,
+                patient_by_email={},
+                synced_at="2026-05-13T00:00:00+00:00",
+            )
+
+        self.assertIsNone(request_item)
+
+    def test_llm_review_failure_falls_back_to_rule_based_triage(self) -> None:
+        with (
+            patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
+            patch.object(
+                handler_module,
+                "_suggest_free_slot_labels",
+                return_value=["Monday 18 May, between 9:00 AM and 12:00 PM (45-minute Initial Consultation)"],
+            ),
+            patch.object(
+                handler_module,
+                "_llm_review_gmail_message",
+                return_value={"review": None, "status": "error", "model": "test-model", "error": "timeout"},
+            ),
+        ):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0],
+                patient_by_email={},
+                synced_at="2026-05-13T00:00:00+00:00",
+            )
+
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        self.assertEqual(request_item["request_type"], "appointment_request")
+        self.assertIn("Monday 18 May", request_item["draft_message"])
+        self.assertFalse(request_item["request_constraints"]["llm_draft_used"])
+        self.assertEqual(request_item["request_constraints"]["llm_review_status"], "error")
+        self.assertEqual(request_item["request_constraints"]["llm_error"], "timeout")
 
     def test_existing_thread_slot_reply_reuses_patient_request_and_creates_booking_action(self) -> None:
         zone = handler_module._clinic_timezone()

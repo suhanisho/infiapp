@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App High-Level Design
 
-Last updated: 2026-05-09
+Last updated: 2026-05-16
 
 This document records the current product and system design for the clinic app.
 It is meant to be readable by a new contributor, a future Codex session, or
@@ -58,6 +58,7 @@ flowchart LR
     Bridge --> Lambda["clinic_agent Lambda"]
     Lambda --> DB["DynamoDB tables"]
     Lambda --> Secrets["AWS Secrets Manager"]
+    Lambda --> LLM["OpenAI API (optional structured LLM review)"]
     Lambda --> Gmail["Gmail API read-only"]
     Lambda --> Calendar["Google Calendar API read + approved event create"]
 
@@ -337,9 +338,10 @@ sequenceDiagram
     Web->>Lambda: scan_gmail_inbox with signed actor assertion
     Lambda->>Gmail: Read recent inbox messages and full message content
     Lambda->>DB: Check processed Gmail message ledger
-    Lambda->>Lambda: Filter unrelated/non-patient email
+    Lambda->>Lambda: Filter obvious non-patient email
     Lambda->>Lambda: Resolve new request vs existing thread reply
-    Lambda->>Lambda: Extract triage and scheduling context
+    Lambda->>Lambda: LLM relevance, classification, and draft review when enabled
+    Lambda->>Lambda: Extract deterministic scheduling and booking context
     Lambda->>DB: Record processed Gmail message
     Lambda->>DB: Upsert patient_request
     Lambda->>DB: Upsert linked review or booking action
@@ -356,6 +358,11 @@ Current Gmail behavior:
   an existing request.
 - Filters obvious non-patient messages such as newsletters, no-reply senders,
   password resets, promotions, and generic marketing.
+- When `OPENAI_API_KEY` is configured, sends a bounded structured review
+  request to the configured OpenAI model. The LLM decides patient relevance,
+  classifies the request, and writes the natural in-app draft reply. If the LLM
+  is disabled, unavailable, or returns invalid JSON, the deterministic rules
+  remain the fallback.
 - Creates or updates `clinic_patient_requests`.
 - Creates or updates a linked child action in `clinic_actions`.
 - Classifies likely patient messages into triage categories such as appointment
@@ -369,7 +376,9 @@ Current Gmail behavior:
 - For urgent clinical concern language, the app prepares an escalation-style
   draft and does not propose appointment availability windows.
 - Drafts a suggested reply for review using the original patient message and
-  extracted context.
+  extracted context. In the LLM path, the prompt requires a concise,
+  patient-specific draft and forbids clinical advice or invented appointment
+  times.
 - If a patient replies in an existing thread with an exact selected slot, the app
   keeps the same `patient_request_id` and creates a booking confirmation action
   with `Approve, send & book`.
@@ -384,12 +393,51 @@ Current Gmail behavior:
   while the linked request is still open, which lets the app repair stale
   generic drafts from an earlier classifier pass.
 - Availability windows are only proposed when the message clearly asks to book,
-  reschedule, or choose an appointment. Patient questions about results,
-  prescriptions, symptoms, or general next steps receive contextual review
-  drafts instead of generic appointment slots.
+  reschedule, or choose an appointment. In the LLM path, the LLM decides whether
+  the reply should include availability, but the backend still generates the
+  actual windows from Calendar/cache and patient constraints. Patient questions
+  about results, prescriptions, symptoms, or general next steps receive
+  contextual review drafts instead of generic appointment slots.
 - Does not send email.
 - Does not create Gmail drafts.
 - Does not label, archive, or mutate Gmail messages.
+
+## LLM Triage Design
+
+The LLM boundary is deliberately narrow. It handles judgement and language; it
+does not perform external actions.
+
+LLM-based steps:
+
+- Patient relevance: decide whether the Gmail message belongs in the patient
+  workflow or should be ignored.
+- Request classification: choose the request type, urgency, risk level,
+  doctor-review requirement, emotional tone, confidence, and triage reason.
+- Draft response: prepare a concise, contextual reply for the doctor to review.
+
+Deterministic steps that stay in code:
+
+- Gmail read and message/thread de-duplication.
+- Patient identity lookup and `patient_id` creation.
+- Gmail thread to `patient_request_id` continuity.
+- Date/time parsing, slot constraints, and Calendar availability generation.
+- Exact booking-candidate extraction and live Calendar availability checks.
+- Gmail send and Calendar write actions, both behind explicit approval.
+
+The backend stores LLM audit metadata on `request_constraints`, including
+`llm_review_status`, `llm_model`, `llm_error`, `llm_patient_relevant`,
+`llm_should_offer_availability`, and `llm_draft_used`.
+
+Runtime configuration:
+
+- `OPENAI_API_KEY`: enables the LLM review path when present.
+- `CLINIC_LLM_ENABLED=false`: disables the LLM path even if a key exists.
+- `CLINIC_LLM_MODEL`: optional model override; defaults to `gpt-5.4-nano`.
+
+When enabled, the original patient email content is sent to the configured
+OpenAI model for the three LLM review steps above. The prompt explicitly says
+that no email is sent and no Calendar event is created until the doctor approves
+inside the app.
 
 ## Rounds
 

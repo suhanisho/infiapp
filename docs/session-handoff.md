@@ -1,6 +1,6 @@
 # Dr. Shalini Clinic App Handoff
 
-Last updated: 2026-05-09
+Last updated: 2026-05-16
 
 This document captures the key design decisions and session context needed to
 continue work on the Dr. Shalini clinic app.
@@ -26,10 +26,10 @@ starting a duplicate one.
 - Vercel project: `shalini-clinic-webui`
 - Deploy workflow: `.github/workflows/deploy.yml`
 - Deploys are manual `workflow_dispatch` runs against `build-clinic-mvp`.
-- Latest production code commit before this change set: `9fb45f5` - Add
-  approval-gated Gmail sending.
+- Latest production code commit before this change set: `5bb53b6` - Reprocess
+  stale Gmail triage records.
 - Latest successful deploy run:
-  `https://github.com/suhanisho/infiapp/actions/runs/25564898598`
+  `https://github.com/suhanisho/infiapp/actions/runs/25964489454`
 
 ## Safety contract
 
@@ -146,6 +146,10 @@ Gmail:
   `patient_request_id`.
 - It filters out obvious non-patient messages, including newsletters, no-reply
   senders, promos, password resets, and marketing-style emails.
+- If `OPENAI_API_KEY` is configured, the Gmail scan uses a structured OpenAI
+  review for patient relevance, request classification, and draft wording. The
+  current rule-based triage/draft logic remains the fallback when the LLM is
+  disabled, unavailable, or returns invalid JSON.
 - It stores the main request in `clinic_patient_requests` using
   `practice_id + patient_request_id`.
 - It adds intelligent triage fields to each patient request: request type,
@@ -173,9 +177,12 @@ Gmail:
   open, so stale generic drafts can be corrected without manually deleting
   ledger rows.
 - The app should only propose Calendar availability when the message clearly has
-  scheduling intent. Result questions, prescription/admin requests, symptom
-  questions, and general next-step questions should get contextual review drafts
-  instead of generic meeting-slot replies.
+  scheduling intent. In the LLM-enabled path, the LLM decides whether
+  availability belongs in the reply, but the backend still generates the actual
+  windows from Calendar/cache and patient constraints. Result questions,
+  prescription/admin requests, symptom questions, and general next-step
+  questions should get contextual review drafts instead of generic meeting-slot
+  replies.
 - It does not send email, label/archive messages, or create Gmail drafts.
 
 Approval:
@@ -196,6 +203,31 @@ Approval:
   `approve_send_and_book_calendar`, verifies the slot against live Google
   Calendar, creates a Calendar event with no attendee/invite emails, sends the
   edited Gmail confirmation, and marks the linked patient request complete.
+
+## LLM triage and drafts
+
+The LLM boundary is intentionally limited to the three judgement-heavy Gmail
+steps:
+
+- Patient relevance: is this message part of the clinic/patient workflow?
+- Request classification: what type of request is it, how urgent/risky is it,
+  and does it need doctor review?
+- Draft wording: what should the in-app reply draft say?
+
+Everything that can mutate the outside world remains deterministic and
+approval-gated: Gmail send, Calendar event creation, Calendar availability
+checks, and completed-action audit writes.
+
+Runtime configuration:
+
+- `OPENAI_API_KEY` in GitHub Actions secrets enables the backend LLM path.
+- Optional `CLINIC_LLM_ENABLED=false` in GitHub Actions variables disables it.
+- Optional `CLINIC_LLM_MODEL` overrides the default `gpt-5.4-nano`.
+
+The deploy script passes these LLM values only to the Lambda environment, not to
+Vercel browser/server env. The request metadata records `llm_review_status`,
+`llm_model`, `llm_error`, `llm_patient_relevant`,
+`llm_should_offer_availability`, and `llm_draft_used`.
 
 ## Scheduling design decisions
 
@@ -283,6 +315,7 @@ GitHub Actions secrets currently expected:
 - `GOOGLE_OAUTH_CLIENT_ID`
 - `GOOGLE_OAUTH_CLIENT_SECRET`
 - `NEXTAUTH_SECRET`
+- Optional but required for LLM triage/drafts: `OPENAI_API_KEY`
 - Optional: `CLINIC_AGENT_INTERNAL_SECRET`; if omitted, the app uses
   `NEXTAUTH_SECRET` for the internal signed actor assertion.
 
@@ -293,6 +326,9 @@ GitHub Actions variables currently expected:
 - Optional: `CLINIC_ALLOW_SELF_ONBOARDING=true`
 - Optional: `CLINIC_DEMO_SEED_DATA=true` to show demo patients/actions for a
   practice. New real practice IDs do not receive demo patient data by default.
+- Optional: `CLINIC_LLM_ENABLED=false` to force the rule-based fallback even if
+  `OPENAI_API_KEY` is present.
+- Optional: `CLINIC_LLM_MODEL` to override the default LLM model.
 - Optional: `GOOGLE_TOKEN_SECRET_PREFIX` as a root prefix; the Lambda appends
   `practice_id/clinic_agent/google`. If omitted, the root prefix defaults to
   `shalini-clinic`.

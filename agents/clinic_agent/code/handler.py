@@ -14,6 +14,8 @@ import html
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
@@ -70,6 +72,10 @@ DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = "in:inbox newer_than:30d -category:promotions -category:social"
 GMAIL_SCAN_MAX_MESSAGES = 25
+OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+DEFAULT_CLINIC_LLM_MODEL = "gpt-5.4-nano"
+CLINIC_LLM_TIMEOUT_SECONDS = 20
+CLINIC_LLM_MAX_EMAIL_CHARS = 5000
 DEFAULT_SLOT_SUGGESTIONS = 3
 SLOT_SEARCH_DAYS = 14
 SLOT_STEP_MINUTES = 30
@@ -320,6 +326,24 @@ DIRECT_PATIENT_REQUEST_PATTERN = re.compile(
     r"\b(i|i'm|i’d|i'd|my|me|could|can|would|please|available|prefer|need|want)\b",
     flags=re.IGNORECASE,
 )
+LLM_REQUEST_TYPES = {
+    "appointment_request",
+    "appointment_booking_selection",
+    "reschedule_cancellation",
+    "follow_up",
+    "urgent_clinical_concern",
+    "routine_clinical_question",
+    "test_report_result_query",
+    "prescription_admin_request",
+    "billing_payment",
+    "general_logistics",
+    "general_patient_question",
+    "non_patient",
+}
+LLM_URGENCY_LEVELS = {"routine", "soon", "urgent"}
+LLM_RISK_LEVELS = {"low", "medium", "high"}
+LLM_EMOTIONAL_TONES = {"neutral", "anxious_or_frustrated"}
+LLM_ACTION_PRIORITIES = {"urgent", "clinical", "action", "admin", "new", "info"}
 
 
 class SlotConstraints(TypedDict):
@@ -345,6 +369,30 @@ class TriageResult(TypedDict):
     triage_confidence: Decimal
     triage_reason: str
     action_priority: str
+
+
+class LlmClinicReview(TypedDict):
+    is_patient_relevant: bool
+    request_type: str
+    urgency_level: str
+    risk_level: str
+    requires_doctor_review: bool
+    suggested_next_action: str
+    patient_emotional_tone: str
+    triage_confidence: Decimal
+    triage_reason: str
+    action_priority: str
+    should_offer_availability: bool
+    draft_message: str
+    ignored_reason: str
+    model: str
+
+
+class LlmClinicReviewOutcome(TypedDict):
+    review: LlmClinicReview | None
+    status: str
+    model: str
+    error: str
 
 
 class DateMention(TypedDict):
@@ -2518,6 +2566,320 @@ def _is_clinic_message(
     return False
 
 
+def _is_obvious_non_patient_message(*, headers: dict[str, str], snippet: str) -> bool:
+    sender_email = parseaddr(headers.get("from", ""))[1].lower()
+    sender_text = headers.get("from", "").lower()
+    subject = headers.get("subject", "")
+    combined_text = f"{subject} {snippet}".lower()
+    return (
+        _contains_any(sender_email, NON_PATIENT_SENDER_MARKERS)
+        or _contains_any(sender_text, NON_PATIENT_SENDER_MARKERS)
+        or _contains_any(combined_text, NON_PATIENT_TEXT_MARKERS)
+    )
+
+
+def _clinic_llm_model() -> str:
+    return os.environ.get("CLINIC_LLM_MODEL", DEFAULT_CLINIC_LLM_MODEL).strip() or DEFAULT_CLINIC_LLM_MODEL
+
+
+def _clinic_llm_enabled() -> bool:
+    enabled_value = os.environ.get("CLINIC_LLM_ENABLED", "true").strip().lower()
+    if enabled_value in {"0", "false", "no", "off"}:
+        return False
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+def _truncate_for_llm(value: str, *, limit: int = CLINIC_LLM_MAX_EMAIL_CHARS) -> str:
+    normalized = value.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit].rstrip()}\n\n[Message truncated for triage.]"
+
+
+def _clinic_llm_response_schema() -> dict[str, Any]:
+    return {
+        "name": "clinic_gmail_review",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "is_patient_relevant": {"type": "boolean"},
+                "request_type": {
+                    "type": "string",
+                    "enum": sorted(LLM_REQUEST_TYPES),
+                },
+                "urgency_level": {
+                    "type": "string",
+                    "enum": sorted(LLM_URGENCY_LEVELS),
+                },
+                "risk_level": {
+                    "type": "string",
+                    "enum": sorted(LLM_RISK_LEVELS),
+                },
+                "requires_doctor_review": {"type": "boolean"},
+                "suggested_next_action": {"type": "string"},
+                "patient_emotional_tone": {
+                    "type": "string",
+                    "enum": sorted(LLM_EMOTIONAL_TONES),
+                },
+                "triage_confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "triage_reason": {"type": "string"},
+                "action_priority": {
+                    "type": "string",
+                    "enum": sorted(LLM_ACTION_PRIORITIES),
+                },
+                "should_offer_availability": {"type": "boolean"},
+                "draft_message": {"type": "string"},
+                "ignored_reason": {"type": "string"},
+            },
+            "required": [
+                "is_patient_relevant",
+                "request_type",
+                "urgency_level",
+                "risk_level",
+                "requires_doctor_review",
+                "suggested_next_action",
+                "patient_emotional_tone",
+                "triage_confidence",
+                "triage_reason",
+                "action_priority",
+                "should_offer_availability",
+                "draft_message",
+                "ignored_reason",
+            ],
+        },
+    }
+
+
+def _clinic_llm_system_prompt() -> str:
+    return (
+        "You are an inbox triage assistant for a private medical clinic. "
+        "Return only JSON that matches the provided schema.\n\n"
+        "Your job has three parts: decide whether the Gmail message is relevant "
+        "to a patient or prospective patient workflow, classify the request, and "
+        "write a warm draft reply for the doctor to review.\n\n"
+        "Patient-relevant messages include messages from patients, prospective "
+        "patients, carers, referrers, or clinic partners about appointments, "
+        "symptoms, test results, prescriptions, fees, clinic logistics, or follow-up. "
+        "Irrelevant messages include marketing, newsletters, automated account "
+        "alerts, password resets, delivery notices, generic promotions, and "
+        "anything unrelated to the medical practice. For irrelevant messages, set "
+        "is_patient_relevant=false, request_type=non_patient, draft_message='', and "
+        "explain briefly in ignored_reason.\n\n"
+        "Request types must be one of: appointment_request, "
+        "appointment_booking_selection, reschedule_cancellation, follow_up, "
+        "urgent_clinical_concern, routine_clinical_question, "
+        "test_report_result_query, prescription_admin_request, billing_payment, "
+        "general_logistics, general_patient_question, non_patient.\n\n"
+        "Safety rules: do not diagnose, reassure clinically, or give treatment "
+        "advice. For clinical questions, acknowledge the message and say Dr. "
+        "Shalini will review it. Do not invent appointment times. Use only the "
+        "calendar_availability_windows supplied in the user payload. If no windows "
+        "are supplied, do not propose any time. If booking_candidate.available is "
+        "true, you may write the reply as a booking confirmation, but remember no "
+        "email is sent and no calendar event is created until the doctor explicitly "
+        "approves in the app. Keep drafts concise, personal to the patient's "
+        "message, and in British English. Sign as Dr. Shalini's Clinic."
+    )
+
+
+def _safe_llm_decimal(value: Any, fallback: Decimal) -> Decimal:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    numeric = max(0.0, min(1.0, numeric))
+    return cast(Decimal, _dynamodb_decimal(f"{numeric:.2f}"))
+
+
+def _validated_llm_review(raw_review: Any, *, model: str, fallback: TriageResult) -> LlmClinicReview | None:
+    if not isinstance(raw_review, dict):
+        return None
+    request_type = str(raw_review.get("request_type", fallback["request_type"])).strip()
+    if request_type not in LLM_REQUEST_TYPES:
+        request_type = fallback["request_type"]
+    urgency_level = str(raw_review.get("urgency_level", fallback["urgency_level"])).strip()
+    if urgency_level not in LLM_URGENCY_LEVELS:
+        urgency_level = fallback["urgency_level"]
+    risk_level = str(raw_review.get("risk_level", fallback["risk_level"])).strip()
+    if risk_level not in LLM_RISK_LEVELS:
+        risk_level = fallback["risk_level"]
+    emotional_tone = str(raw_review.get("patient_emotional_tone", fallback["patient_emotional_tone"])).strip()
+    if emotional_tone not in LLM_EMOTIONAL_TONES:
+        emotional_tone = fallback["patient_emotional_tone"]
+    action_priority = str(raw_review.get("action_priority", fallback["action_priority"])).strip()
+    if action_priority not in LLM_ACTION_PRIORITIES:
+        action_priority = fallback["action_priority"]
+    if risk_level == "high":
+        urgency_level = "urgent"
+        action_priority = "urgent"
+
+    is_patient_relevant = bool(raw_review.get("is_patient_relevant"))
+    should_offer_availability = bool(raw_review.get("should_offer_availability"))
+    if request_type == "non_patient":
+        is_patient_relevant = False
+        should_offer_availability = False
+    if risk_level == "high":
+        should_offer_availability = False
+
+    suggested_next_action = str(raw_review.get("suggested_next_action", "")).strip()
+    triage_reason = str(raw_review.get("triage_reason", "")).strip()
+    draft_message = str(raw_review.get("draft_message", "")).strip()
+    ignored_reason = str(raw_review.get("ignored_reason", "")).strip()
+    if is_patient_relevant and not suggested_next_action:
+        suggested_next_action = fallback["suggested_next_action"]
+    if is_patient_relevant and not triage_reason:
+        triage_reason = fallback["triage_reason"]
+
+    return {
+        "is_patient_relevant": is_patient_relevant,
+        "request_type": request_type,
+        "urgency_level": urgency_level,
+        "risk_level": risk_level,
+        "requires_doctor_review": bool(raw_review.get("requires_doctor_review", fallback["requires_doctor_review"])),
+        "suggested_next_action": suggested_next_action,
+        "patient_emotional_tone": emotional_tone,
+        "triage_confidence": _safe_llm_decimal(raw_review.get("triage_confidence"), fallback["triage_confidence"]),
+        "triage_reason": triage_reason,
+        "action_priority": action_priority,
+        "should_offer_availability": should_offer_availability,
+        "draft_message": draft_message,
+        "ignored_reason": ignored_reason,
+        "model": model,
+    }
+
+
+def _openai_chat_completion_json(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    request = urllib.request.Request(
+        os.environ.get("OPENAI_CHAT_COMPLETIONS_URL", OPENAI_CHAT_COMPLETIONS_URL),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=CLINIC_LLM_TIMEOUT_SECONDS) as response:
+        response_body = response.read().decode("utf-8")
+    parsed_response = json.loads(response_body)
+    content = parsed_response["choices"][0]["message"]["content"]
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text", part.get("content", ""))) if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    if not isinstance(content, str):
+        raise ValueError("OpenAI response content was not text.")
+    return cast(dict[str, Any], json.loads(content))
+
+
+def _llm_review_gmail_message(
+    *,
+    context: GmailMessageContext,
+    patient_name: str,
+    patient_email: str,
+    request_text: str,
+    fallback_triage: TriageResult,
+    appointment_kind: str,
+    duration_minutes: int,
+    constraints: SlotConstraints,
+    calendar_availability_windows: list[str],
+    booking_candidate: BookingCandidate | None,
+    existing_request: ClinicPatientRequestsItem | None,
+) -> LlmClinicReviewOutcome:
+    model = _clinic_llm_model()
+    if not _clinic_llm_enabled():
+        return {"review": None, "status": "disabled", "model": model, "error": ""}
+
+    booking_candidate_payload: dict[str, Any] | None = None
+    if booking_candidate is not None:
+        booking_candidate_payload = {
+            "label": booking_candidate["label"],
+            "available": booking_candidate["available"],
+            "reason": booking_candidate["reason"],
+            "start_at": booking_candidate["start_at"].isoformat(),
+            "end_at": booking_candidate["end_at"].isoformat(),
+        }
+    existing_request_payload: dict[str, Any] | None = None
+    if existing_request is not None:
+        existing_request_payload = {
+            "patient_request_id": existing_request["patient_request_id"],
+            "status": existing_request["status"],
+            "request_type": existing_request["request_type"],
+            "source_summary": existing_request["source_summary"],
+            "previous_proposed_windows": existing_request["proposed_windows"],
+        }
+
+    user_payload = {
+        "clinic": "Dr. Shalini's Clinic",
+        "patient": {
+            "name": patient_name,
+            "email": patient_email,
+            "matched_existing_request": existing_request is not None,
+        },
+        "gmail_message": {
+            "from": context["sender_name"],
+            "subject": context["subject"],
+            "snippet": context["snippet"],
+            "received_at": context["received_at"].isoformat(),
+            "body": _truncate_for_llm(context["message_text"]),
+        },
+        "deterministic_context": {
+            "fallback_request_type": fallback_triage["request_type"],
+            "fallback_risk_level": fallback_triage["risk_level"],
+            "appointment_kind": appointment_kind,
+            "duration_minutes": duration_minutes,
+            "constraint_summary": constraints["constraint_summary"],
+            "calendar_availability_windows": calendar_availability_windows,
+            "booking_candidate": booking_candidate_payload,
+            "existing_request": existing_request_payload,
+            "no_external_action_without_doctor_approval": True,
+        },
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _clinic_llm_system_prompt()},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=True)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": _clinic_llm_response_schema(),
+        },
+        "max_completion_tokens": 1200,
+    }
+    try:
+        raw_review = _openai_chat_completion_json(payload)
+        review = _validated_llm_review(raw_review, model=model, fallback=fallback_triage)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        return {"review": None, "status": "error", "model": model, "error": str(exc)[:240]}
+    if review is None:
+        return {"review": None, "status": "invalid", "model": model, "error": "LLM response did not match the expected shape."}
+    return {"review": review, "status": "used", "model": model, "error": ""}
+
+
+def _triage_from_llm_review(review: LlmClinicReview, fallback: TriageResult) -> TriageResult:
+    if not review["is_patient_relevant"]:
+        return fallback
+    return {
+        "request_type": review["request_type"],
+        "urgency_level": review["urgency_level"],
+        "risk_level": review["risk_level"],
+        "requires_doctor_review": review["requires_doctor_review"],
+        "suggested_next_action": review["suggested_next_action"],
+        "patient_emotional_tone": review["patient_emotional_tone"],
+        "triage_confidence": review["triage_confidence"],
+        "triage_reason": review["triage_reason"],
+        "action_priority": review["action_priority"],
+    }
+
+
 def _infer_gmail_action_type(text: str) -> tuple[str, str]:
     lowered = text.lower()
     if "reschedule" in lowered or "cancel" in lowered or "move" in lowered:
@@ -3586,6 +3948,7 @@ def _should_offer_availability_windows(
     request_text: str,
     existing_request: ClinicPatientRequestsItem | None,
     booking_candidate: BookingCandidate | None,
+    llm_should_offer_availability: bool | None = None,
 ) -> bool:
     if existing_request is not None:
         return False
@@ -3595,6 +3958,8 @@ def _should_offer_availability_windows(
         return False
     if triage["request_type"] not in {"appointment_request", "reschedule_cancellation", "follow_up"}:
         return False
+    if llm_should_offer_availability is not None:
+        return llm_should_offer_availability
     return _has_scheduling_intent(request_text)
 
 
@@ -3716,11 +4081,15 @@ def _gmail_message_to_patient_request_item(
         return None
 
     headers = _gmail_headers(message)
-    if existing_request is None and not _is_clinic_message(
+    relevance_text = f"{context['snippet']} {context['message_text']}"
+    if existing_request is None and _is_obvious_non_patient_message(headers=headers, snippet=relevance_text):
+        return None
+    rule_clinic_relevant = _is_clinic_message(
         headers=headers,
-        snippet=f"{context['snippet']} {context['message_text']}",
+        snippet=relevance_text,
         patient_by_email=patient_by_email,
-    ):
+    )
+    if existing_request is None and not rule_clinic_relevant and not _clinic_llm_enabled():
         return None
 
     normalized_sender_email = context["sender_email"]
@@ -3779,21 +4148,101 @@ def _gmail_message_to_patient_request_item(
                 "triage_reason": "Patient replied in an existing request thread with a specific appointment time.",
                 "action_priority": "action",
             }
-    slot_labels = (
-        _suggest_free_slot_labels(
-            appointment_kind=appointment_kind,
-            duration_minutes=duration_minutes,
-            constraints=constraints,
+
+    candidate_slot_labels = (
+        _filter_slot_labels_by_constraints(
+            _suggest_free_slot_labels(
+                appointment_kind=appointment_kind,
+                duration_minutes=duration_minutes,
+                constraints=constraints,
+            ),
+            constraints,
         )
-        if _should_offer_availability_windows(
-            triage=triage,
-            request_text=request_text,
-            existing_request=existing_request,
-            booking_candidate=booking_candidate,
-        )
+        if _clinic_llm_enabled()
+        and existing_request is None
+        and not (booking_candidate is not None and booking_candidate["available"])
+        and triage["risk_level"] != "high"
         else []
     )
+    llm_outcome = _llm_review_gmail_message(
+        context=context,
+        patient_name=patient_name,
+        patient_email=patient_email,
+        request_text=request_text,
+        fallback_triage=triage,
+        appointment_kind=appointment_kind,
+        duration_minutes=duration_minutes,
+        constraints=constraints,
+        calendar_availability_windows=candidate_slot_labels,
+        booking_candidate=booking_candidate,
+        existing_request=existing_request,
+    )
+    llm_review = llm_outcome["review"]
+    if existing_request is None:
+        if llm_review is not None:
+            if not llm_review["is_patient_relevant"]:
+                return None
+        elif not rule_clinic_relevant:
+            return None
+    if llm_review is not None and llm_review["is_patient_relevant"]:
+        triage = _triage_from_llm_review(llm_review, triage)
+    if existing_request is not None and booking_candidate is not None:
+        triage = {
+            **triage,
+            "request_type": "appointment_booking_selection",
+            "urgency_level": "soon",
+            "risk_level": "low",
+            "requires_doctor_review": False,
+            "suggested_next_action": "Review the selected slot, then book the appointment and send the confirmation.",
+            "triage_confidence": _dynamodb_decimal("0.92"),
+            "triage_reason": "Patient replied in an existing request thread with a specific appointment time.",
+            "action_priority": "action",
+        }
+
+    llm_should_offer_availability = (
+        llm_review["should_offer_availability"] if llm_review is not None and llm_review["is_patient_relevant"] else None
+    )
+    should_offer_availability = _should_offer_availability_windows(
+        triage=triage,
+        request_text=request_text,
+        existing_request=existing_request,
+        booking_candidate=booking_candidate,
+        llm_should_offer_availability=llm_should_offer_availability,
+    )
+    slot_labels = (
+        candidate_slot_labels
+        if should_offer_availability and candidate_slot_labels
+        else (
+            _suggest_free_slot_labels(
+                appointment_kind=appointment_kind,
+                duration_minutes=duration_minutes,
+                constraints=constraints,
+            )
+            if should_offer_availability
+            else []
+        )
+    )
     slot_labels = _filter_slot_labels_by_constraints(slot_labels, constraints)
+    llm_draft_message = (
+        llm_review["draft_message"].strip()
+        if llm_review is not None and llm_review["is_patient_relevant"] and llm_review["draft_message"].strip()
+        else ""
+    )
+    if llm_draft_message and llm_review is not None and llm_review["should_offer_availability"] and not slot_labels:
+        llm_draft_message = ""
+    if llm_draft_message:
+        draft_message = llm_draft_message
+    else:
+        draft_message = _draft_reply_for_message(
+            patient_name,
+            summary,
+            appointment_kind=appointment_kind,
+            slot_labels=slot_labels,
+            request_text=request_text,
+            booking_candidate=booking_candidate,
+            constraints=constraints,
+            triage=triage,
+        )
     patient_request_id = (
         existing_request["patient_request_id"]
         if existing_request is not None
@@ -3803,16 +4252,17 @@ def _gmail_message_to_patient_request_item(
             else f"gmail-{_safe_external_fragment(context['gmail_message_id'])}"
         )
     )
-    draft_message = _draft_reply_for_message(
-        patient_name,
-        summary,
-        appointment_kind=appointment_kind,
-        slot_labels=slot_labels,
-        request_text=request_text,
-        booking_candidate=booking_candidate,
-        constraints=constraints,
-        triage=triage,
-    )
+    llm_request_metadata = {
+        "llm_review_status": llm_outcome["status"],
+        "llm_model": llm_outcome["model"],
+        "llm_error": llm_outcome["error"],
+        "llm_patient_relevant": llm_review["is_patient_relevant"] if llm_review is not None else False,
+        "llm_should_offer_availability": (
+            llm_review["should_offer_availability"] if llm_review is not None else False
+        ),
+        "llm_draft_used": bool(llm_draft_message),
+        "llm_ignored_reason": llm_review["ignored_reason"] if llm_review is not None else "",
+    }
 
     return {
         "practice_id": _practice_id(),
@@ -3837,6 +4287,7 @@ def _gmail_message_to_patient_request_item(
             "message_signature": context["message_signature"],
             "previous_patient_request_status": existing_request["status"] if existing_request is not None else "",
             "previous_proposed_windows": existing_request["proposed_windows"] if existing_request is not None else [],
+            **llm_request_metadata,
             **(
                 {
                     "booking_candidate_start_at": booking_candidate["start_at"].isoformat(),

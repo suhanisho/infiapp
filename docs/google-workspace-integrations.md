@@ -47,11 +47,13 @@ external writes are deliberately approval-gated.
 - `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail messages,
   checks the Gmail message ledger, resolves Gmail threads into existing patient
   requests where possible, and upserts patient requests plus in-app action
-  drafts. It does not delete durable open requests that are absent from a later
-  scan. For scheduling requests such as meet-and-greet or initial
-  consultation messages, draft replies include availability windows from the
-  local Google Calendar cache, filtered by patient preferences in the email such
-  as weekdays, next week, morning/afternoon, or after/before time constraints.
+  drafts. If `OPENAI_API_KEY` is configured, relevance, classification, and
+  draft wording are LLM-assisted with deterministic fallback. It does not delete
+  durable open requests that are absent from a later scan. For scheduling
+  requests such as meet-and-greet or initial consultation messages, draft
+  replies include availability windows from the local Google Calendar cache,
+  filtered by patient preferences in the email such as weekdays, next week,
+  morning/afternoon, or after/before time constraints.
 - If the patient replies in the same Gmail thread with an exact preferred slot,
   the app keeps the same `patient_request_id` and creates a `confirm_booking`
   action instead of another first-contact availability draft.

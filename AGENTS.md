@@ -68,6 +68,9 @@ The most important product rule is explicit approval before external action.
   replies to the existing `patient_request_id`.
 - `clinic_email_messages` records processed inbound/outbound Gmail messages for
   idempotency, duplicate detection, thread continuity, and audit.
+- Gmail patient relevance, request classification, and natural draft wording can
+  be LLM-assisted when `OPENAI_API_KEY` is present. The deterministic rules are
+  still the fallback, and all external actions remain approval-gated.
 
 ## Google Integration Rules
 
@@ -102,6 +105,22 @@ Calendar writes must:
 - create events with `sendUpdates=none`; patient communication stays in Gmail
 - record the external Calendar event id for audit
 - stay covered by tests whenever a new Calendar mutation path is added
+
+## LLM Rules
+
+- The current LLM boundary is limited to Gmail relevance, classification, and
+  draft wording.
+- The LLM must not invent appointment times. Calendar windows come from backend
+  slot generation only.
+- The LLM must not imply an email was sent or a Calendar event was created
+  before explicit doctor approval.
+- Keep deterministic code responsible for Gmail/thread de-duplication,
+  `patient_id` creation, date/time parsing, slot generation, booking-candidate
+  extraction, Gmail send, and Calendar writes.
+- Runtime env:
+  - `OPENAI_API_KEY` enables the path.
+  - `CLINIC_LLM_ENABLED=false` disables it.
+  - `CLINIC_LLM_MODEL` overrides the default model.
 
 ## Frontend Direction
 
