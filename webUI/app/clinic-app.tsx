@@ -116,6 +116,15 @@ function initials(name: string) {
     .slice(0, 2);
 }
 
+function gestationLabel(value?: string | null) {
+  return value && value.trim() ? value.trim() : "";
+}
+
+function scheduleSubtitle(event: ScheduleEvent) {
+  const gestationAge = gestationLabel(event.gestationAge);
+  return [gestationAge ? `${gestationAge} gestation` : "", event.appointmentType].filter(Boolean).join(" · ");
+}
+
 function metadataValue(action: ClinicAction, key: string) {
   const metadata = action.metadata || {};
   return metadata[key];
@@ -364,8 +373,13 @@ function Rounds({
               <article key={event.eventId} className="rounds-schedule-item">
                 <time>{event.startTime}</time>
                 <span>
-                  <strong>{event.patientName}</strong>
-                  <small>{event.appointmentType}</small>
+                  <strong className="name-with-pill">
+                    <span>{event.patientName}</span>
+                    {gestationLabel(event.gestationAge) ? (
+                      <span className="gestation-pill">{gestationLabel(event.gestationAge)}</span>
+                    ) : null}
+                  </strong>
+                  <small>{scheduleSubtitle(event)}</small>
                 </span>
               </article>
             ))}
@@ -609,9 +623,14 @@ function Schedule({ days }: { days: ScheduleDay[] }) {
               <article key={event.eventId} className={`timeline-item event-${event.status}`}>
                 <time>{event.startTime}</time>
                 <div>
-                  <strong>{event.patientName}</strong>
+                  <strong className="name-with-pill">
+                    <span>{event.patientName}</span>
+                    {gestationLabel(event.gestationAge) ? (
+                      <span className="gestation-pill">{gestationLabel(event.gestationAge)}</span>
+                    ) : null}
+                  </strong>
                   <span>
-                    {event.appointmentType} · {event.startTime} - {event.endTime}
+                    {scheduleSubtitle(event)} · {event.startTime} - {event.endTime}
                   </span>
                 </div>
               </article>
@@ -688,7 +707,12 @@ function Patients({ patients }: { patients: Patient[] }) {
               >
                 <span className={`avatar avatar-${patient.status}`}>{initials(patient.name)}</span>
                 <span className="row-copy">
-                  <strong>{patient.name}</strong>
+                  <strong className="name-with-pill">
+                    <span>{patient.name}</span>
+                    {gestationLabel(patient.gestationAge) ? (
+                      <span className="gestation-pill">{gestationLabel(patient.gestationAge)}</span>
+                    ) : null}
+                  </strong>
                   <small>{patientSummary}</small>
                 </span>
                 <span className={`status-pill status-${patient.status}`}>{statusLabel(patient.status)}</span>
@@ -704,6 +728,10 @@ function Patients({ patients }: { patients: Patient[] }) {
                     <div>
                       <dt>Email</dt>
                       <dd>{patient.email}</dd>
+                    </div>
+                    <div>
+                      <dt>Gestation</dt>
+                      <dd>{gestationLabel(patient.gestationAge) || "Not recorded"}</dd>
                     </div>
                     <div>
                       <dt>Next</dt>

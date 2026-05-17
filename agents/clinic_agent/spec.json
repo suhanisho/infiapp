@@ -255,6 +255,7 @@
         "patients": [
           {
             "email": "String",
+            "gestationAge": "String | Null",
             "lastVisit": "String",
             "lastRequestAt": "String | Null",
             "name": "String",
@@ -335,6 +336,7 @@
                 "externalCalendarId": "String | Null",
                 "externalEventId": "String | Null",
                 "eventId": "String",
+                "gestationAge": "String | Null",
                 "lastSyncedAt": "String | Null",
                 "patientId": "String | Null",
                 "patientName": "String",
@@ -483,6 +485,7 @@
                 "externalCalendarId": "String | Null",
                 "externalEventId": "String | Null",
                 "eventId": "String",
+                "gestationAge": "String | Null",
                 "lastSyncedAt": "String | Null",
                 "patientId": "String | Null",
                 "patientName": "String",

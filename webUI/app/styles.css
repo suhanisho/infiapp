@@ -533,7 +533,7 @@ h1 {
   line-height: 1.4;
 }
 
-.rounds-schedule-item span {
+.rounds-schedule-item > span {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -670,6 +670,33 @@ h1 {
   font-size: 1rem;
   font-weight: 500;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-with-pill {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.name-with-pill > span:first-child {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gestation-pill {
+  flex: 0 0 auto;
+  border: 1px solid #c4dfd2;
+  border-radius: 999px;
+  background: #dcefe6;
+  color: var(--green);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 3px 8px;
   white-space: nowrap;
 }
 
@@ -1060,7 +1087,7 @@ h1 {
   font-weight: 500;
 }
 
-.timeline-item span {
+.timeline-item div > span {
   color: var(--muted);
   font-size: 0.88rem;
   font-weight: 500;
@@ -1134,7 +1161,7 @@ h1 {
 
 .patient-detail dl {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 8px;
   margin: 12px 0 0;
 }

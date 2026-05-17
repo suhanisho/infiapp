@@ -644,6 +644,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p1",
         "name": "Emma Richardson",
         "email": "emma.r@gmail.com",
+        "gestation_age": "28+4",
         "phone": "07412 345 678",
         "last_visit": "28 Apr 2026",
         "next_appt": "-",
@@ -656,6 +657,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p2",
         "name": "Lucy Chen",
         "email": "lucy.chen@outlook.com",
+        "gestation_age": "12+1",
         "phone": "07891 234 567",
         "last_visit": "28 Apr 2026",
         "next_appt": "-",
@@ -668,6 +670,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p3",
         "name": "Sarah Mitchell",
         "email": "s.mitchell@yahoo.com",
+        "gestation_age": "20+6",
         "phone": "07723 456 789",
         "last_visit": "28 Apr 2026",
         "next_appt": "-",
@@ -680,6 +683,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p8",
         "name": "Fatima Ali",
         "email": "fatima.ali@gmail.com",
+        "gestation_age": "",
         "phone": "07978 901 234",
         "last_visit": "4 Apr 2026",
         "next_appt": "Fri 2 May, 11:00 AM",
@@ -692,6 +696,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p9",
         "name": "Priya Sharma",
         "email": "priya.sharma@gmail.com",
+        "gestation_age": "",
         "phone": "07089 012 345",
         "last_visit": "31 Mar 2026",
         "next_appt": "-",
@@ -704,6 +709,7 @@ SEED_PATIENTS: list[ClinicPatientsItem] = [
         "patient_id": "p10",
         "name": "Rachel Davies",
         "email": "rachel.d@gmail.com",
+        "gestation_age": "",
         "phone": "07190 123 456",
         "last_visit": "-",
         "next_appt": "Pending",
@@ -975,6 +981,48 @@ def _patient_display_name(sender_name: str, sender_email: str) -> str:
     return local_name.title() if local_name else sender_email or "Unknown patient"
 
 
+def _patient_lookup_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def _patient_gestation_age(item: ClinicPatientsItem | None) -> str | None:
+    if item is None:
+        return None
+    value = item.get("gestation_age", "")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _gestation_age_from_text(text: str) -> str:
+    normalized = " ".join(text.split())
+    if not normalized:
+        return ""
+
+    compact_match = re.search(r"\b(?P<weeks>[1-4]?\d)\s*(?:\+|w\s*)\s*(?P<days>[0-6])\s*d?\b", normalized, re.I)
+    if compact_match:
+        weeks = int(compact_match.group("weeks"))
+        days = int(compact_match.group("days"))
+        if 4 <= weeks <= 45:
+            return f"{weeks}+{days}"
+
+    contextual_pattern = re.compile(
+        r"\b(?P<weeks>[1-4]?\d)\s*(?:weeks?|wks?|w)"
+        r"(?:\s*(?:and)?\s*(?P<days>[0-6])\s*(?:days?|d))?"
+        r"\b",
+        re.I,
+    )
+    for match in contextual_pattern.finditer(normalized):
+        weeks = int(match.group("weeks"))
+        if weeks < 4 or weeks > 45:
+            continue
+        window = normalized[max(0, match.start() - 40) : min(len(normalized), match.end() + 40)].lower()
+        if not any(marker in window for marker in ("pregnan", "gestation", "gestational", "antenatal")):
+            continue
+        days = int(match.group("days") or 0)
+        return f"{weeks}+{days}" if days else f"{weeks} weeks"
+
+    return ""
+
+
 def _action_dto(item: ClinicActionsItem) -> dict[str, Any]:
     return {
         "actionId": item["action_id"],
@@ -1070,6 +1118,7 @@ def _patient_dto(item: ClinicPatientsItem, timeline: list[dict[str, Any]] | None
         "patientId": item["patient_id"],
         "name": item["name"],
         "email": item["email"],
+        "gestationAge": _patient_gestation_age(item),
         "phone": item["phone"],
         "lastVisit": item["last_visit"],
         "nextAppt": item["next_appt"],
@@ -1083,13 +1132,40 @@ def _patient_dto(item: ClinicPatientsItem, timeline: list[dict[str, Any]] | None
     }
 
 
-def _schedule_event_dto(item: ClinicScheduleItem) -> dict[str, Any]:
+def _patient_for_schedule_item(
+    item: ClinicScheduleItem,
+    patients_by_id: dict[str, ClinicPatientsItem],
+    patients_by_name: dict[str, ClinicPatientsItem],
+) -> ClinicPatientsItem | None:
+    patient_id = item["patient_id"].strip()
+    if patient_id and patient_id in patients_by_id:
+        return patients_by_id[patient_id]
+
+    schedule_name = _patient_lookup_name(item["patient_name"])
+    if not schedule_name:
+        return None
+    exact_match = patients_by_name.get(schedule_name)
+    if exact_match is not None:
+        return exact_match
+    for patient_name, patient in sorted(patients_by_name.items(), key=lambda entry: len(entry[0]), reverse=True):
+        if patient_name and schedule_name.startswith(f"{patient_name} "):
+            return patient
+    return None
+
+
+def _schedule_event_dto(
+    item: ClinicScheduleItem,
+    patients_by_id: dict[str, ClinicPatientsItem] | None = None,
+    patients_by_name: dict[str, ClinicPatientsItem] | None = None,
+) -> dict[str, Any]:
+    matched_patient = _patient_for_schedule_item(item, patients_by_id or {}, patients_by_name or {})
     return {
         "eventId": item["event_id"],
         "appointmentType": item["appointment_type"],
         "endTime": item["end_time"],
         "externalCalendarId": _optional_text(item["external_calendar_id"]),
         "externalEventId": _optional_text(item["external_event_id"]),
+        "gestationAge": _patient_gestation_age(matched_patient),
         "lastSyncedAt": _optional_text(item["last_synced_at"]),
         "patientId": _optional_text(item["patient_id"]),
         "patientName": item["patient_name"],
@@ -1799,6 +1875,9 @@ def _schedule_day_shell(day_date: date) -> dict[str, Any]:
 
 def _list_schedule() -> dict[str, Any]:
     items = sorted(_list_schedule_items(), key=lambda item: (item["start_at"], item["sort_order"], item["start_time"]))
+    patient_items = _list_patient_items()
+    patients_by_id = {item["patient_id"]: item for item in patient_items if item["patient_id"]}
+    patients_by_name = {_patient_lookup_name(item["name"]): item for item in patient_items if item["name"].strip()}
     today = datetime.now(_clinic_timezone()).date()
     window_end = today + timedelta(days=CALENDAR_SYNC_DAYS)
     days_by_date = {
@@ -1815,7 +1894,9 @@ def _list_schedule() -> dict[str, Any]:
             days_by_date[day_key] = _schedule_day_shell(item_date)
         if item["day_type"] == "nhs":
             days_by_date[day_key]["dayType"] = "nhs"
-        cast(list[dict[str, Any]], days_by_date[day_key]["events"]).append(_schedule_event_dto(item))
+        cast(list[dict[str, Any]], days_by_date[day_key]["events"]).append(
+            _schedule_event_dto(item, patients_by_id, patients_by_name)
+        )
 
     return {"days": [days_by_date[key] for key in sorted(days_by_date)]}
 
@@ -2354,11 +2435,15 @@ def _patient_lookup_by_email() -> dict[str, ClinicPatientsItem]:
 def _patient_item_from_request(item: ClinicPatientRequestsItem) -> ClinicPatientsItem:
     name = item["patient_name"].strip() or item["patient_email"].strip() or "Unknown patient"
     note_source = item["source_summary"].strip() or item["request_type"].replace("_", " ")
+    gestation_age = _gestation_age_from_text(
+        " ".join([item["source_subject"], item["source_summary"], item["source_excerpt"]])
+    )
     return {
         "clinic_id": _clinic_id(),
         "patient_id": item["patient_id"],
         "name": name,
         "email": item["patient_email"].strip().lower(),
+        "gestation_age": gestation_age,
         "phone": "",
         "last_visit": "-",
         "next_appt": "Pending request",
@@ -2373,6 +2458,11 @@ def _ensure_patient_for_request(item: ClinicPatientRequestsItem) -> None:
         return
     existing = get_clinic_patients(_clinic_id(), item["patient_id"])
     if existing is not None:
+        gestation_age = _gestation_age_from_text(
+            " ".join([item["source_subject"], item["source_summary"], item["source_excerpt"]])
+        )
+        if gestation_age and _patient_gestation_age(existing) is None:
+            put_clinic_patients(cast(ClinicPatientsItem, {**existing, "gestation_age": gestation_age}))
         return
     put_clinic_patients(_patient_item_from_request(item))
 

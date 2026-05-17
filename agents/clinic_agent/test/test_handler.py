@@ -539,13 +539,30 @@ class ClinicAgentTest(unittest.TestCase):
             "status": "upcoming",
             "sort_order": 1,
         }
-        with patch.object(handler_module, "query_clinic_schedule", return_value=[schedule_item]):
+        patient_item = {
+            "clinic_id": handler_module.LEGACY_CLINIC_ID,
+            "patient_id": "patient-1",
+            "name": "Future Patient",
+            "email": "future.patient@example.com",
+            "gestation_age": "24+3",
+            "phone": "",
+            "last_visit": "-",
+            "next_appt": "-",
+            "visits": 1,
+            "status": "active",
+            "notes": "",
+        }
+        with (
+            patch.object(handler_module, "query_clinic_schedule", return_value=[schedule_item]),
+            patch.object(handler_module, "query_clinic_patients", return_value=[patient_item]),
+        ):
             body = handler_module._list_schedule()
 
         self.assertEqual(len(body["days"]), handler_module.CALENDAR_SYNC_DAYS)
         self.assertEqual(body["days"][0]["dayDate"], today.isoformat())
         self.assertEqual(body["days"][2]["dayDate"], appointment_date.isoformat())
         self.assertEqual(body["days"][2]["events"][0]["patientName"], "Future Patient")
+        self.assertEqual(body["days"][2]["events"][0]["gestationAge"], "24+3")
 
     def test_gmail_scan_path_only_prepares_in_app_drafts(self) -> None:
         target_date = datetime.now(handler_module._clinic_timezone()).date() + timedelta(days=7)
@@ -637,6 +654,7 @@ class ClinicAgentTest(unittest.TestCase):
         patient_item = put_patient.call_args.args[0]
         self.assertEqual(patient_item["patient_id"], request_item["patient_id"])
         self.assertEqual(patient_item["email"], "rachel.d@gmail.com")
+        self.assertEqual(patient_item["gestation_age"], "")
         self.assertEqual(patient_item["status"], "new")
         self.assertEqual(actions[0]["patient_id"], request_item["patient_id"])
         self.assertEqual(put_action.call_args.args[0]["patient_id"], request_item["patient_id"])
@@ -661,8 +679,14 @@ class ClinicAgentTest(unittest.TestCase):
         patient = body["patients"][0]
         self.assertEqual(patient["requestCount"], 1)
         self.assertEqual(patient["openRequestCount"], 1)
+        self.assertIsNone(patient["gestationAge"])
         self.assertEqual(patient["timeline"][0]["patientRequestId"], request_item["patient_request_id"])
         self.assertEqual(patient["timeline"][0]["requestType"], "appointment_request")
+
+    def test_gestation_age_extraction_uses_pregnancy_context(self) -> None:
+        self.assertEqual(handler_module._gestation_age_from_text("I am 28+4 and need a follow-up"), "28+4")
+        self.assertEqual(handler_module._gestation_age_from_text("I am 29w pregnant and have a scan"), "29 weeks")
+        self.assertEqual(handler_module._gestation_age_from_text("Last seen 4 weeks ago"), "")
 
     def test_urgent_clinical_message_is_triaged_for_doctor_review(self) -> None:
         message = {

@@ -12,6 +12,7 @@
   "attributes": {
     "clinic_id": "String",
     "email": "String",
+    "gestation_age": "String",
     "last_visit": "String",
     "name": "String",
     "next_appt": "String",

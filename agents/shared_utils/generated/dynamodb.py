@@ -188,6 +188,7 @@ class ClinicPatientsItem(TypedDict):
 
     clinic_id: str
     email: str
+    gestation_age: str
     last_visit: str
     name: str
     next_appt: str
@@ -427,6 +428,7 @@ CLINIC_PATIENTS_TABLE: dict[str, Any] = {
     "attributes": {
         "clinic_id": "String",
         "email": "String",
+        "gestation_age": "String",
         "last_visit": "String",
         "name": "String",
         "next_appt": "String",
