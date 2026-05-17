@@ -39,8 +39,9 @@ This is the most important product rule:
 - No Gmail draft is created without explicit user approval.
 - No calendar event is created, updated, deleted, or blocked without explicit
   user approval.
-- `Approve and store` only stores completion/audit state. `Approve & send
-  Gmail` is the explicit send path and records the Gmail sent message id.
+- The legacy `approve_action` backend path only stores completion/audit state and
+  is no longer exposed in the Review UI. `Approve & send` is the explicit send
+  path and records the Gmail sent message id.
 - `Approve, send & book` is the explicit Calendar booking path. It only appears
   when the patient request contains an exact date/time, verifies the slot
   against Google Calendar, creates the event, sends the edited Gmail
@@ -190,16 +191,12 @@ Gmail:
 
 Approval:
 
-- User expands a request/action card, edits the draft text, then clicks
-  `Approve and store`.
-- `approve_action` marks the action completed and stores final text/audit
-  metadata. If the action links to a `patient_request_id`, the patient request
-  is marked completed with the same final text and approval metadata.
-- It does not send the final text anywhere.
-- For Gmail-sourced actions, the doctor can instead click `Approve & send
-  Gmail`. This calls `approve_and_send_gmail`, sends the edited message through
-  Gmail, and records the Gmail sent message id on the action. If the sent reply
-  contains proposed availability windows, the linked request moves to
+- User expands a request/action card, reads the patient email, edits the draft
+  text, then clicks `Approve & send` or `Approve, send & book`.
+- For Gmail-sourced actions, `Approve & send` calls `approve_and_send_gmail`,
+  sends the edited message through Gmail, and records the Gmail sent message id
+  on the action. If the sent reply contains proposed availability windows, the
+  linked request moves to
   `awaiting_patient_slot_selection` instead of `completed`.
 - For Gmail-sourced scheduling replies with an exact patient-selected slot, the
   doctor can click `Approve, send & book`. This calls
@@ -295,12 +292,14 @@ Important UI decisions:
   - `Reconnect Google`
   - `Read Calendar`
   - `Scan Gmail`
-- Request cards expand to show source email, triage, patient context, and an
-  editable draft reply.
+- Request cards expand to focus on patient email and editable draft reply.
+  Triage, patient context, and explanation details are hidden behind `Why this
+  draft?`.
 - The `Patients` tab shows linked request history. Gmail scan now creates a
   deterministic `patient_id` and a patient record for new clinic-relevant
   senders, then links requests/actions back to that patient.
-- Draft reply text is editable before `Approve and store`.
+- Draft reply text is editable before `Approve & send` or
+  `Approve, send & book`.
 - The bottom nav has:
   - `Rounds`
   - `Schedule`

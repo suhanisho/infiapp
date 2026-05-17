@@ -23,7 +23,7 @@ The core idea is:
 
 The MVP is intentionally approval-first. It can scan, summarize, suggest, store
 approval/audit state, and send Gmail replies only through the explicit
-`Approve & send Gmail` path. It can also book an exact patient-selected slot in
+`Approve & send` path. It can also book an exact patient-selected slot in
 Google Calendar only through the explicit `Approve, send & book` path. It does
 not create Gmail drafts.
 
@@ -35,8 +35,9 @@ This is the most important design rule in the system:
 - No Gmail draft is created without explicit user approval.
 - No calendar event is created, updated, deleted, or blocked without explicit
   user approval.
-- `Approve and store` only records completed state and audit information.
-- `Approve & send Gmail` sends the edited Gmail reply after explicit approval
+- The legacy `approve_action` backend path only records completed state and
+  audit information; it is not exposed in the Review UI.
+- `Approve & send` sends the edited Gmail reply after explicit approval
   and records the sent message id.
 - `Approve, send & book` creates the Google Calendar event for the exact
   patient-selected slot and sends the edited Gmail confirmation after explicit
@@ -477,11 +478,11 @@ It has two current responsibilities:
 - Show open actions that need attention, sorted so urgent and clinical-review
   items appear before routine admin/scheduling work.
 
-Expanded request cards show the source email, triage, patient context, and an
-editable draft reply. `Rounds` still uses the same approval-gated child actions.
-Reviewing an action and clicking `Approve and store` only records the edited
-final text and audit state. It does not send email, create Gmail drafts, or
-change Google Calendar.
+Expanded request cards now prioritize the doctor's core review job: read the
+patient email, edit the draft reply, then approve a send/book action. Triage,
+patient context, and explanation details are tucked behind `Why this draft?` so
+the card does not feel like a backend log. `Rounds` still uses the same
+approval-gated child actions.
 
 When a Gmail request contains an exact patient-selected date and time, the card
 can also show `Approve, send & book`. That path verifies the slot against
@@ -583,14 +584,8 @@ sequenceDiagram
     participant Gmail as Gmail API
     participant Calendar as Google Calendar API
 
-    User->>Web: Review request and edit draft
-    User->>Web: Click "Approve and store"
-    Web->>Lambda: approve_action
-    Lambda->>DB: Mark action completed
-    Lambda->>DB: Update linked patient_request completion fields
-    Lambda->>Web: Return updated state
-
-    User->>Web: Or click "Approve & send Gmail"
+    User->>Web: Review patient email and edit draft
+    User->>Web: Click "Approve & send"
     Web->>Lambda: approve_and_send_gmail
     Lambda->>Gmail: Send edited reply in source thread
     Lambda->>DB: Store sent Gmail message id and completion audit

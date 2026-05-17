@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { signIn, signOut } from "next-auth/react";
 import type {
-  ClinicAgentApproveActionOutput,
   ClinicAgentApproveAndSendGmailOutput,
   ClinicAgentApproveSendAndBookCalendarOutput,
   ClinicAgentListActionsOutput,
@@ -41,7 +40,7 @@ async function loadJson<T>(url: string): Promise<T> {
   return body;
 }
 
-function actionEndpoint(actionId: string, operation: "approve" | "book" | "send") {
+function actionEndpoint(actionId: string, operation: "book" | "send") {
   return `/api/clinic/actions/${encodeURIComponent(actionId)}/${operation}`;
 }
 
@@ -290,20 +289,16 @@ function Rounds({
   actions,
   days,
   loading,
-  onApprove,
   onBook,
   onSend,
-  approvingId,
   bookingId,
   sendingId,
 }: {
   actions: ClinicAction[];
   days: ScheduleDay[];
   loading: boolean;
-  onApprove: (action: ClinicAction, finalMessage: string) => Promise<void>;
   onBook: (action: ClinicAction, finalMessage: string) => Promise<void>;
   onSend: (action: ClinicAction, finalMessage: string) => Promise<void>;
-  approvingId: string | null;
   bookingId: string | null;
   sendingId: string | null;
 }) {
@@ -403,8 +398,8 @@ function Rounds({
             action.sourceProvider === "gmail" &&
             Boolean(metadataString(action, "booking_candidate_start_at")) &&
             !metadataIsFalse(action, "booking_candidate_available");
-          const actionBusy =
-            approvingId === action.actionId || sendingId === action.actionId || bookingId === action.actionId;
+          const actionBusy = sendingId === action.actionId || bookingId === action.actionId;
+          const showReviewDetails = Boolean(triageReason || suggestedNextAction || constraintSummary);
           return (
             <article key={action.actionId} className={`action-card priority-${action.priority}`}>
               <button
@@ -431,30 +426,9 @@ function Rounds({
 
               {expanded ? (
                 <div className="expanded-content">
-                  <div className="triage-strip" aria-label="Triage details">
-                    <span className={`status-pill ${risk === "high" ? "tone-red" : risk === "medium" ? "tone-purple" : "tone-green"}`}>Risk: {risk}</span>
-                    <span className="status-pill">{actionNeedsDoctorReview(action) ? "Doctor review" : "Admin review"}</span>
-                    <span className="status-pill">Tone: {emotionalTone.replaceAll("_", " ")}</span>
-                  </div>
-
-                  {triageReason || suggestedNextAction ? (
-                    <div className="detail-block">
-                      <span>Triage</span>
-                      {triageReason ? <p>{triageReason}</p> : null}
-                      {suggestedNextAction ? <p>{suggestedNextAction}</p> : null}
-                    </div>
-                  ) : null}
-
-                  {constraintSummary ? (
-                    <div className="detail-block">
-                      <span>Patient context</span>
-                      <p>{constraintSummary}</p>
-                    </div>
-                  ) : null}
-
                   {bookingLabel ? (
-                    <div className="detail-block">
-                      <span>Proposed booking</span>
+                    <div className="detail-block booking-review-block">
+                      <span>Selected appointment</span>
                       <p>
                         {bookingLabel}
                         {bookingUnavailableReason ? ` · ${bookingUnavailableReason}` : ""}
@@ -463,8 +437,8 @@ function Rounds({
                   ) : null}
 
                   {action.sourceMessage ? (
-                    <div className="detail-block">
-                      <span>Source</span>
+                    <div className="detail-block patient-email-block">
+                      <span>Patient email</span>
                       <p>{action.sourceMessage}</p>
                     </div>
                   ) : null}
@@ -486,6 +460,30 @@ function Rounds({
                     </div>
                   ) : null}
 
+                  {showReviewDetails ? (
+                    <details className="review-details">
+                      <summary>Why this draft?</summary>
+                      <div className="triage-strip" aria-label="Triage details">
+                        <span className={`status-pill ${risk === "high" ? "tone-red" : risk === "medium" ? "tone-purple" : "tone-green"}`}>Risk: {risk}</span>
+                        <span className="status-pill">{actionNeedsDoctorReview(action) ? "Doctor review" : "Admin review"}</span>
+                        <span className="status-pill">Tone: {emotionalTone.replaceAll("_", " ")}</span>
+                      </div>
+                      {triageReason || suggestedNextAction ? (
+                        <div className="detail-block compact-detail-block">
+                          <span>Triage</span>
+                          {triageReason ? <p>{triageReason}</p> : null}
+                          {suggestedNextAction ? <p>{suggestedNextAction}</p> : null}
+                        </div>
+                      ) : null}
+                      {constraintSummary ? (
+                        <div className="detail-block compact-detail-block">
+                          <span>Patient context</span>
+                          <p>{constraintSummary}</p>
+                        </div>
+                      ) : null}
+                    </details>
+                  ) : null}
+
                   {action.draftMessage ? (
                     <div className="action-controls">
                       {canBookCalendar ? (
@@ -505,20 +503,15 @@ function Rounds({
                           onClick={() => void onSend(action, draftValue)}
                           disabled={actionBusy}
                         >
-                          {sendingId === action.actionId ? "Sending..." : "Approve & send Gmail"}
+                          {sendingId === action.actionId ? "Sending..." : "Approve & send"}
                         </button>
                       ) : null}
-                      <button
-                        type="button"
-                        className={action.sourceProvider === "gmail" ? "secondary-button" : "primary-button"}
-                        onClick={() => void onApprove(action, draftValue)}
-                        disabled={actionBusy}
-                      >
-                        {approvingId === action.actionId ? "Saving..." : "Approve and store"}
-                      </button>
+                      {!canBookCalendar && action.sourceProvider !== "gmail" ? (
+                        <p className="audit-note">No send action is available for this item.</p>
+                      ) : null}
                     </div>
                   ) : (
-                    <p className="audit-note">Calendar updates are not part of this MVP.</p>
+                    <p className="audit-note">No draft response is available for this item.</p>
                   )}
                 </div>
               ) : null}
@@ -1027,7 +1020,6 @@ export function ClinicApp({
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const [approvingId, setApprovingId] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
@@ -1085,30 +1077,6 @@ export function ClinicApp({
     }
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   }, []);
-
-  async function approveAction(action: ClinicAction, finalMessage: string) {
-    setApprovingId(action.actionId);
-    setError("");
-    try {
-      const response = await fetch(actionEndpoint(action.actionId, "approve"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          approvedBy: "Dr. Shalini",
-          finalMessage: finalMessage.trim() || action.draftMessage || action.sourceSummary,
-        }),
-      });
-      const body = (await response.json()) as ClinicAgentApproveActionOutput & { error?: string };
-      if (!response.ok) {
-        throw new Error(body.error || "Unable to approve action");
-      }
-      setActions((current) => current.map((item) => (item.actionId === body.action.actionId ? body.action : item)));
-    } catch (approveError) {
-      setError(approveError instanceof Error ? approveError.message : "Unable to approve action");
-    } finally {
-      setApprovingId(null);
-    }
-  }
 
   async function approveAndSendGmail(action: ClinicAction, finalMessage: string) {
     const messageToSend = finalMessage.trim() || action.draftMessage || action.sourceSummary;
@@ -1310,10 +1278,8 @@ export function ClinicApp({
             actions={actions}
             days={days}
             loading={loading}
-            onApprove={approveAction}
             onBook={approveSendAndBookCalendar}
             onSend={approveAndSendGmail}
-            approvingId={approvingId}
             bookingId={bookingId}
             sendingId={sendingId}
           />

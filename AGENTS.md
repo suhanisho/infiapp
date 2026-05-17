@@ -25,9 +25,9 @@ The most important product rule is explicit approval before external action.
 - No Gmail draft is created without explicit doctor approval.
 - No Google Calendar event is created, updated, deleted, held, or blocked
   without explicit doctor approval.
-- `Approve and store` is audit-only. It stores the final message and completion
-  state, but does not call Gmail or Calendar.
-- `Approve & send Gmail` is the send-only path. It sends the edited reply
+- The legacy `approve_action` backend path is audit-only and does not call Gmail
+  or Calendar, but it is no longer exposed as a Review-card button.
+- `Approve & send` is the send-only path. It sends the edited reply
   through Gmail after an explicit confirmation, then records the Gmail sent
   message id for audit. If the reply proposes availability windows, the linked
   request should wait in `awaiting_patient_slot_selection`.
@@ -134,8 +134,8 @@ Calendar writes must:
 - Keep the UI doctor-facing and operational, not a marketing page.
 - The doctor should be able to review, edit, approve, and understand why an
   action exists.
-- Gmail actions should make `Approve & send Gmail` primary and keep
-  `Approve and store` as the safe secondary fallback.
+- Gmail actions should expose `Approve & send` or `Approve, send & book`; do not
+  reintroduce an `Approve and store` button in the Review UI.
 
 ## Repo Conventions
 

@@ -787,6 +787,21 @@ h1 {
   text-transform: uppercase;
 }
 
+.booking-review-block {
+  border-color: #c4dfd2;
+  background: #eef7f1;
+}
+
+.booking-review-block p {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.patient-email-block p {
+  color: var(--ink);
+  white-space: pre-line;
+}
+
 .draft-block {
   background: #eef7f1;
   border-color: #c4dfd2;
@@ -815,6 +830,40 @@ h1 {
 .draft-editor:focus {
   border-color: var(--gold);
   box-shadow: 0 0 0 3px rgba(36, 123, 103, 0.13);
+}
+
+.review-details {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffdf8;
+  padding: 10px 11px;
+}
+
+.review-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.review-details[open] summary {
+  margin-bottom: 10px;
+}
+
+.review-details .triage-strip {
+  padding-top: 0;
+}
+
+.compact-detail-block {
+  margin-top: 8px;
+  border-color: var(--line-soft);
+  background: #fbf7ed;
+}
+
+.compact-detail-block p {
+  color: var(--ink);
+  font-size: 0.95rem;
 }
 
 .action-controls {
