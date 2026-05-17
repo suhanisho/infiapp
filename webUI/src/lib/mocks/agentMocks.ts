@@ -733,6 +733,35 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
     throw new Error(`No mock registered for ${agentName}`);
   }
 
+  if (payload.action === "get_daily_briefing") {
+    const today = new Date();
+    const dayDate = today.toISOString().slice(0, 10);
+    const todaySchedule = scheduleDays.find((day) => day.dayDate === dayDate) || scheduleDays[0];
+    const appointments = (todaySchedule?.events || []).filter((event) => event.status !== "open");
+    const openActions = actions.filter((item) => item.status !== "completed");
+    const appointmentCopy =
+      appointments.length === 0
+        ? "Calendar context has not been read yet."
+        : appointments.length === 1
+          ? `One appointment is on the calendar at ${appointments[0].startTime}.`
+          : `${appointments.length} appointments are on the calendar; next at ${appointments[0].startTime}.`;
+    return {
+      briefing: `${appointmentCopy} ${openActions.length} open action${openActions.length === 1 ? "" : "s"} ready for review.`,
+      dayDate,
+      generatedAt: nowIso(),
+      llmError: null,
+      llmModel: "mock",
+      llmStatus: "used",
+      metrics: {
+        appointmentCount: appointments.length,
+        openActionCount: openActions.length,
+        urgentActionCount: openActions.filter((item) => item.priority === "urgent").length,
+        clinicalReviewCount: openActions.filter((item) => item.priority === "clinical").length,
+      },
+      practiceId: mockPracticeId,
+      source: "mock",
+    };
+  }
   if (payload.action === "list_actions") {
     const includeCompleted = payload.includeCompleted === true;
     return {

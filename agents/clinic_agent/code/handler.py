@@ -395,6 +395,13 @@ class LlmClinicReviewOutcome(TypedDict):
     error: str
 
 
+class LlmDailyBriefingOutcome(TypedDict):
+    briefing: str
+    status: str
+    model: str
+    error: str
+
+
 class DateMention(TypedDict):
     value: date
     start: int
@@ -1901,6 +1908,146 @@ def _list_schedule() -> dict[str, Any]:
     return {"days": [days_by_date[key] for key in sorted(days_by_date)]}
 
 
+def _action_metadata_string(item: ClinicActionsItem, key: str) -> str:
+    metadata = item.get("metadata", {})
+    value = metadata.get(key) if isinstance(metadata, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def _action_needs_doctor_review(item: ClinicActionsItem) -> bool:
+    metadata = item.get("metadata", {})
+    requires_review = metadata.get("requires_doctor_review") if isinstance(metadata, dict) else False
+    return (
+        requires_review is True
+        or _action_metadata_string(item, "risk_level") == "high"
+        or _action_metadata_string(item, "urgency_level") == "urgent"
+        or item["priority"] in {"urgent", "clinical"}
+    )
+
+
+def _action_attention_rank(item: ClinicActionsItem) -> int:
+    if _action_metadata_string(item, "urgency_level") == "urgent" or item["priority"] == "urgent":
+        return 0
+    if _action_needs_doctor_review(item):
+        return 1
+    if item["priority"] == "action":
+        return 2
+    if item["priority"] == "new":
+        return 3
+    return 4
+
+
+def _daily_schedule_context(schedule: dict[str, Any], today: date) -> tuple[list[dict[str, Any]], bool]:
+    days = schedule.get("days", [])
+    if not isinstance(days, list):
+        return [], False
+    today_key = today.isoformat()
+    selected_day = next(
+        (
+            day
+            for day in days
+            if isinstance(day, dict) and (day.get("dayDate") == today_key or day.get("dayLabel") == f"{today:%A} {today.day} {today:%b}")
+        ),
+        None,
+    )
+    if selected_day is None and days and isinstance(days[0], dict):
+        selected_day = days[0]
+    if selected_day is None:
+        return [], False
+    events = selected_day.get("events", [])
+    if not isinstance(events, list):
+        return [], True
+    return [cast(dict[str, Any], event) for event in events if isinstance(event, dict) and event.get("status") != "open"], True
+
+
+def _daily_attention_summary(open_actions: list[ClinicActionsItem]) -> str:
+    urgent = len([item for item in open_actions if _action_attention_rank(item) == 0])
+    clinical = len([item for item in open_actions if _action_needs_doctor_review(item)])
+    if urgent > 0:
+        return f"{urgent} urgent item{'s' if urgent != 1 else ''} should be reviewed first."
+    if clinical > 0:
+        return f"{clinical} clinical review item{'s' if clinical != 1 else ''} need your attention."
+    if open_actions:
+        return f"{len(open_actions)} open action{'s' if len(open_actions) != 1 else ''} ready for review."
+    return "No open actions waiting for review."
+
+
+def _daily_briefing_fallback(
+    open_actions: list[ClinicActionsItem],
+    schedule_events: list[dict[str, Any]],
+    *,
+    schedule_loaded: bool,
+) -> str:
+    if not schedule_events:
+        appointment_copy = "No appointments are on the calendar today." if schedule_loaded else "Calendar context has not been read yet."
+    elif len(schedule_events) == 1:
+        appointment_copy = f"One appointment is on the calendar at {schedule_events[0].get('startTime', '')}."
+    else:
+        appointment_copy = f"{len(schedule_events)} appointments are on the calendar; next at {schedule_events[0].get('startTime', '')}."
+    return f"{appointment_copy} {_daily_attention_summary(open_actions)}"
+
+
+def _daily_briefing_action_payload(item: ClinicActionsItem) -> dict[str, Any]:
+    return {
+        "patient_name": item["patient_name"],
+        "action_type": item["action_type"],
+        "priority": item["priority"],
+        "time_label": item["time_label"],
+        "source_summary": item["source_summary"],
+        "urgency_level": _action_metadata_string(item, "urgency_level") or "routine",
+        "risk_level": _action_metadata_string(item, "risk_level") or "low",
+        "requires_doctor_review": _action_needs_doctor_review(item),
+        "suggested_next_action": _action_metadata_string(item, "suggested_next_action"),
+    }
+
+
+def _daily_briefing_schedule_payload(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "start_time": str(event.get("startTime", "")),
+        "end_time": str(event.get("endTime", "")),
+        "patient_name": str(event.get("patientName", "")),
+        "gestation_age": str(event.get("gestationAge", "") or ""),
+        "appointment_type": str(event.get("appointmentType", "")),
+        "status": str(event.get("status", "")),
+    }
+
+
+def _daily_briefing() -> dict[str, Any]:
+    now = datetime.now(_clinic_timezone())
+    action_items = sorted(
+        [item for item in _list_action_items() if item["status"] != "completed"],
+        key=lambda item: (_action_attention_rank(item), item["created_at"]),
+    )
+    schedule_events, schedule_loaded = _daily_schedule_context(_list_schedule(), now.date())
+    fallback = _daily_briefing_fallback(action_items, schedule_events, schedule_loaded=schedule_loaded)
+    metrics = {
+        "appointmentCount": len(schedule_events),
+        "openActionCount": len(action_items),
+        "urgentActionCount": len([item for item in action_items if _action_attention_rank(item) == 0]),
+        "clinicalReviewCount": len([item for item in action_items if _action_needs_doctor_review(item)]),
+        "scheduleLoaded": 1 if schedule_loaded else 0,
+    }
+    llm_outcome = _llm_daily_briefing(
+        today=now.date(),
+        fallback=fallback,
+        schedule_events=schedule_events,
+        open_actions=action_items,
+        metrics=metrics,
+    )
+    used_llm = llm_outcome["status"] == "used" and bool(llm_outcome["briefing"].strip())
+    return {
+        "briefing": llm_outcome["briefing"] if used_llm else fallback,
+        "dayDate": now.date().isoformat(),
+        "generatedAt": now.isoformat(),
+        "llmError": _optional_text(llm_outcome["error"]),
+        "llmModel": llm_outcome["model"],
+        "llmStatus": llm_outcome["status"],
+        "metrics": metrics,
+        "practiceId": _practice_id(),
+        "source": "llm" if used_llm else "fallback",
+    }
+
+
 def _setting_items(setting_id: str, settings: dict[str, ClinicSettingsItem]) -> list[dict[str, Any]]:
     setting = settings.get(setting_id)
     if setting is None:
@@ -2919,6 +3066,80 @@ def _openai_chat_completion_json(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(content, str):
         raise ValueError("OpenAI response content was not text.")
     return cast(dict[str, Any], json.loads(content))
+
+
+def _daily_briefing_llm_response_schema() -> dict[str, Any]:
+    return {
+        "name": "clinic_daily_briefing",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "briefing": {"type": "string"},
+            },
+            "required": ["briefing"],
+        },
+    }
+
+
+def _daily_briefing_system_prompt() -> str:
+    return (
+        "You write the Today Briefing card for Dr. Shalini's private clinic. "
+        "Return only JSON matching the provided schema.\n\n"
+        "Write one or two calm, doctor-facing sentences, no more than 60 words. "
+        "Use British English. Prioritise urgent or clinical review items, then "
+        "summarise today's appointments. Mention patient gestation only when it "
+        "is supplied in the payload. Do not invent patients, diagnoses, clinical "
+        "advice, appointment times, or completed work. Do not mention implementation "
+        "details or the word JSON. Remember that emails and calendar updates only "
+        "happen after explicit doctor approval."
+    )
+
+
+def _llm_daily_briefing(
+    *,
+    today: date,
+    fallback: str,
+    schedule_events: list[dict[str, Any]],
+    open_actions: list[ClinicActionsItem],
+    metrics: dict[str, int],
+) -> LlmDailyBriefingOutcome:
+    model = _clinic_llm_model()
+    if not _clinic_llm_enabled():
+        return {"briefing": "", "status": "disabled", "model": model, "error": ""}
+
+    user_payload = {
+        "clinic": "Dr. Shalini's Clinic",
+        "day_date": today.isoformat(),
+        "metrics": metrics,
+        "schedule_events": [_daily_briefing_schedule_payload(event) for event in schedule_events[:10]],
+        "schedule_loaded": bool(metrics.get("scheduleLoaded", 0)),
+        "open_actions": [_daily_briefing_action_payload(item) for item in open_actions[:8]],
+        "deterministic_fallback": fallback,
+        "no_external_action_without_doctor_approval": True,
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _daily_briefing_system_prompt()},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=True)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": _daily_briefing_llm_response_schema(),
+        },
+        "max_completion_tokens": 350,
+    }
+    try:
+        raw_briefing = _openai_chat_completion_json(payload)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        return {"briefing": "", "status": "error", "model": model, "error": str(exc)[:240]}
+
+    briefing = str(raw_briefing.get("briefing", "")).strip()
+    if not briefing:
+        return {"briefing": "", "status": "invalid", "model": model, "error": "LLM briefing was empty."}
+    return {"briefing": _truncate(briefing, 500), "status": "used", "model": model, "error": ""}
 
 
 def _llm_review_gmail_message(
@@ -4779,6 +5000,8 @@ def _handle_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     if action == "list_actions":
         return json_response(200, _list_actions(bool(payload.get("includeCompleted", False))))
+    if action == "get_daily_briefing":
+        return json_response(200, _daily_briefing())
     if action == "list_patient_requests":
         return json_response(200, _list_patient_requests(bool(payload.get("includeCompleted", False))))
     if action == "approve_action":

@@ -156,6 +156,24 @@
       }
     },
     {
+      "call": "get_daily_briefing",
+      "description": "Generates the Rounds daily briefing from today's schedule and open action queue, using the clinic LLM when available and a deterministic fallback otherwise.",
+      "input": {
+        "actorEmail?": "String"
+      },
+      "output": {
+        "briefing": "String",
+        "dayDate": "String",
+        "generatedAt": "String",
+        "llmError": "String | Null",
+        "llmModel": "String",
+        "llmStatus": "String",
+        "metrics": "Map",
+        "practiceId": "String",
+        "source": "String"
+      }
+    },
+    {
       "call": "list_actions",
       "description": "Lists durable action queue records, including completed records when requested for future validation.",
       "input": {

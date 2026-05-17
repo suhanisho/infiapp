@@ -4,7 +4,7 @@ import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 import crypto from "node:crypto";
 
-import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentApproveAndSendGmailInput, type ClinicAgentApproveAndSendGmailOutput, type ClinicAgentApproveSendAndBookCalendarInput, type ClinicAgentApproveSendAndBookCalendarOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientRequestsInput, type ClinicAgentListPatientRequestsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
+import { mockCallClinicAgent, type ClinicAgentApproveActionInput, type ClinicAgentApproveActionOutput, type ClinicAgentApproveAndSendGmailInput, type ClinicAgentApproveAndSendGmailOutput, type ClinicAgentApproveSendAndBookCalendarInput, type ClinicAgentApproveSendAndBookCalendarOutput, type ClinicAgentConnectGoogleWorkspaceInput, type ClinicAgentConnectGoogleWorkspaceOutput, type ClinicAgentGetDailyBriefingInput, type ClinicAgentGetDailyBriefingOutput, type ClinicAgentListActionsInput, type ClinicAgentListActionsOutput, type ClinicAgentListIntegrationsInput, type ClinicAgentListIntegrationsOutput, type ClinicAgentListPatientRequestsInput, type ClinicAgentListPatientRequestsOutput, type ClinicAgentListPatientsInput, type ClinicAgentListPatientsOutput, type ClinicAgentListScheduleInput, type ClinicAgentListScheduleOutput, type ClinicAgentListSettingsInput, type ClinicAgentListSettingsOutput, type ClinicAgentScanGmailInboxInput, type ClinicAgentScanGmailInboxOutput, type ClinicAgentSyncGoogleCalendarInput, type ClinicAgentSyncGoogleCalendarOutput } from "./mockAgents";
 
 type AgentBackendMode = "mock" | "aws_oidc";
 
@@ -170,6 +170,14 @@ export async function callClinicAgentConnectGoogleWorkspace(input: ClinicAgentCo
     return mockCallClinicAgent(payload) as Promise<ClinicAgentConnectGoogleWorkspaceOutput>;
   }
   return invokeLambda<ClinicAgentConnectGoogleWorkspaceOutput>("clinic_agent", payload);
+}
+
+export async function callClinicAgentGetDailyBriefing(input: ClinicAgentGetDailyBriefingInput): Promise<ClinicAgentGetDailyBriefingOutput> {
+  const payload: { action: "get_daily_briefing" } & ClinicAgentGetDailyBriefingInput = { action: "get_daily_briefing", ...input };
+  if (getBackendMode() === "mock") {
+    return mockCallClinicAgent(payload) as Promise<ClinicAgentGetDailyBriefingOutput>;
+  }
+  return invokeLambda<ClinicAgentGetDailyBriefingOutput>("clinic_agent", payload);
 }
 
 export async function callClinicAgentListActions(input: ClinicAgentListActionsInput): Promise<ClinicAgentListActionsOutput> {

@@ -564,6 +564,83 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["days"][2]["events"][0]["patientName"], "Future Patient")
         self.assertEqual(body["days"][2]["events"][0]["gestationAge"], "24+3")
 
+    def test_daily_briefing_falls_back_when_llm_disabled(self) -> None:
+        today = datetime.now(handler_module._clinic_timezone()).date()
+        action_item = {
+            **handler_module.SEED_ACTIONS[0],
+            "status": "needs_approval",
+            "priority": "clinical",
+            "metadata": {"requires_doctor_review": True, "risk_level": "medium", "urgency_level": "soon"},
+        }
+        schedule = {
+            "days": [
+                {
+                    "dayDate": today.isoformat(),
+                    "dayKey": f"{today:%a} {today.day}",
+                    "dayLabel": f"{today:%A} {today.day} {today:%b}",
+                    "dayType": "private",
+                    "events": [
+                        {
+                            "eventId": "event-1",
+                            "appointmentType": "Follow-up",
+                            "endTime": "09:45",
+                            "externalCalendarId": "primary",
+                            "externalEventId": "external-1",
+                            "gestationAge": "28+4",
+                            "lastSyncedAt": "2026-05-08T10:00:00+01:00",
+                            "patientId": "patient-1",
+                            "patientName": "Future Patient",
+                            "sourceProvider": "google_calendar",
+                            "startTime": "09:00",
+                            "status": "upcoming",
+                        }
+                    ],
+                }
+            ]
+        }
+        with (
+            patch.object(handler_module, "_list_action_items", return_value=[action_item]),
+            patch.object(handler_module, "_list_schedule", return_value=schedule),
+        ):
+            body = handler_module._daily_briefing()
+
+        self.assertEqual(body["source"], "fallback")
+        self.assertEqual(body["llmStatus"], "disabled")
+        self.assertIn("One appointment is on the calendar at 09:00", body["briefing"])
+        self.assertEqual(body["metrics"]["appointmentCount"], 1)
+        self.assertEqual(body["metrics"]["clinicalReviewCount"], 1)
+
+    def test_daily_briefing_uses_llm_when_available(self) -> None:
+        today = datetime.now(handler_module._clinic_timezone()).date()
+        schedule = {
+            "days": [
+                {
+                    "dayDate": today.isoformat(),
+                    "dayKey": f"{today:%a} {today.day}",
+                    "dayLabel": f"{today:%A} {today.day} {today:%b}",
+                    "dayType": "private",
+                    "events": [],
+                }
+            ]
+        }
+        with (
+            patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
+            patch.object(handler_module, "_list_action_items", return_value=[]),
+            patch.object(handler_module, "_list_schedule", return_value=schedule),
+            patch.object(
+                handler_module,
+                "_openai_chat_completion_json",
+                return_value={"briefing": "A quiet clinic day: no appointments are booked and no actions need review."},
+            ) as llm_call,
+        ):
+            body = handler_module._daily_briefing()
+
+        self.assertEqual(body["source"], "llm")
+        self.assertEqual(body["llmStatus"], "used")
+        self.assertIn("quiet clinic day", body["briefing"])
+        payload = llm_call.call_args.args[0]
+        self.assertEqual(payload["response_format"]["json_schema"]["name"], "clinic_daily_briefing")
+
     def test_gmail_scan_path_only_prepares_in_app_drafts(self) -> None:
         target_date = datetime.now(handler_module._clinic_timezone()).date() + timedelta(days=7)
         slot_day = f"{target_date:%A} {target_date.day} {target_date:%b}"

@@ -5,6 +5,7 @@ import { signIn, signOut } from "next-auth/react";
 import type {
   ClinicAgentApproveAndSendGmailOutput,
   ClinicAgentApproveSendAndBookCalendarOutput,
+  ClinicAgentGetDailyBriefingOutput,
   ClinicAgentListActionsOutput,
   ClinicAgentListIntegrationsOutput,
   ClinicAgentListPatientsOutput,
@@ -16,6 +17,7 @@ import type {
 import { googleProviderId } from "@/src/lib/auth/providers";
 
 type ClinicAction = ClinicAgentListActionsOutput["actions"][number];
+type DailyBriefing = ClinicAgentGetDailyBriefingOutput;
 type Patient = ClinicAgentListPatientsOutput["patients"][number];
 type ScheduleDay = ClinicAgentListScheduleOutput["days"][number];
 type Settings = ClinicAgentListSettingsOutput;
@@ -296,6 +298,7 @@ function briefingCopy(openActions: ClinicAction[], scheduleEvents: ScheduleEvent
 
 function Rounds({
   actions,
+  briefing,
   days,
   loading,
   onBook,
@@ -304,6 +307,7 @@ function Rounds({
   sendingId,
 }: {
   actions: ClinicAction[];
+  briefing: DailyBriefing | null;
   days: ScheduleDay[];
   loading: boolean;
   onBook: (action: ClinicAction, finalMessage: string) => Promise<void>;
@@ -324,6 +328,7 @@ function Rounds({
   const clinicalReviewCount = openActions.filter(actionNeedsDoctorReview).length;
   const scheduleEvents = scheduleEventsForToday(days);
   const schedulePreview = scheduleEvents.slice(0, 3);
+  const briefingText = briefing?.briefing || briefingCopy(openActions, scheduleEvents);
 
   useEffect(() => {
     setDraftEdits((current) => {
@@ -346,7 +351,7 @@ function Rounds({
 
       <div className="briefing">
         <span className="briefing-label">Today · Briefing</span>
-        <p>{briefingCopy(openActions, scheduleEvents)}</p>
+        <p>{briefingText}</p>
         <div className="briefing-metrics" aria-label="Rounds summary">
           <span>
             <strong>{scheduleEvents.length}</strong>
@@ -1017,14 +1022,15 @@ function SettingsDrawer({
 }
 
 async function loadClinicSnapshot() {
-  const [actionData, patientData, scheduleData, settingsData, integrationData] = await Promise.all([
+  const [actionData, patientData, scheduleData, settingsData, integrationData, briefingData] = await Promise.all([
     loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
     loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
     loadJson<ClinicAgentListScheduleOutput>("/api/clinic/schedule"),
     loadJson<ClinicAgentListSettingsOutput>("/api/clinic/settings"),
     loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations"),
+    loadJson<ClinicAgentGetDailyBriefingOutput>("/api/clinic/briefing"),
   ]);
-  return { actionData, patientData, scheduleData, settingsData, integrationData };
+  return { actionData, patientData, scheduleData, settingsData, integrationData, briefingData };
 }
 
 export function ClinicApp({
@@ -1043,6 +1049,7 @@ export function ClinicApp({
   const [actions, setActions] = useState<ClinicAction[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [days, setDays] = useState<ScheduleDay[]>([]);
+  const [dailyBriefing, setDailyBriefing] = useState<DailyBriefing | null>(null);
   const [settings, setSettings] = useState<Settings>(emptySettings);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1059,10 +1066,12 @@ export function ClinicApp({
       setLoading(true);
       setError("");
       try {
-        const { actionData, patientData, scheduleData, settingsData, integrationData } = await loadClinicSnapshot();
+        const { actionData, patientData, scheduleData, settingsData, integrationData, briefingData } =
+          await loadClinicSnapshot();
         setActions(actionData.actions);
         setPatients(patientData.patients);
         setDays(scheduleData.days);
+        setDailyBriefing(briefingData);
         setSettings(settingsData);
         setIntegrations(integrationData.integrations);
       } catch (loadError) {
@@ -1130,6 +1139,7 @@ export function ClinicApp({
         throw new Error(body.error || "Unable to send Gmail reply");
       }
       setActions((current) => current.map((item) => (item.actionId === body.action.actionId ? body.action : item)));
+      await refreshDailyBriefing();
       setNotice("Gmail reply sent after your approval.");
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send Gmail reply");
@@ -1171,6 +1181,7 @@ export function ClinicApp({
       ]);
       setDays(scheduleData.days);
       setPatients(patientData.patients);
+      await refreshDailyBriefing();
       setNotice("Appointment booked in Google Calendar and Gmail confirmation sent after your approval.");
     } catch (bookError) {
       setError(bookError instanceof Error ? bookError.message : "Unable to book appointment");
@@ -1184,6 +1195,15 @@ export function ClinicApp({
     setIntegrations(integrationData.integrations);
   }
 
+  async function refreshDailyBriefing() {
+    try {
+      const briefingData = await loadJson<ClinicAgentGetDailyBriefingOutput>("/api/clinic/briefing");
+      setDailyBriefing(briefingData);
+    } catch {
+      // Keep the existing briefing if regeneration fails; the Rounds card has a local fallback.
+    }
+  }
+
   async function syncGoogleCalendar() {
     setSyncingCalendar(true);
     setError("");
@@ -1195,7 +1215,7 @@ export function ClinicApp({
         throw new Error(body.error || "Unable to read Google Calendar");
       }
       setDays(body.days);
-      await refreshIntegrations();
+      await Promise.all([refreshIntegrations(), refreshDailyBriefing()]);
       setTab("schedule");
       setNotice(`${body.eventsRead} calendar events read. Google Calendar was not changed.`);
     } catch (syncError) {
@@ -1221,7 +1241,7 @@ export function ClinicApp({
       ]);
       setActions(actionData.actions);
       setPatients(patientData.patients);
-      await refreshIntegrations();
+      await Promise.all([refreshIntegrations(), refreshDailyBriefing()]);
       setTab("actions");
       setNotice(`${body.messagesScanned} Gmail messages scanned; ${body.proposedActions} in-app drafts prepared. Nothing was sent.`);
     } catch (scanError) {
@@ -1304,6 +1324,7 @@ export function ClinicApp({
         {!showOnboarding && tab === "actions" ? (
           <Rounds
             actions={actions}
+            briefing={dailyBriefing}
             days={days}
             loading={loading}
             onBook={approveSendAndBookCalendar}
