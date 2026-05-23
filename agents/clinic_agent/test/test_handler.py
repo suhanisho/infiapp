@@ -1185,12 +1185,18 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIsNone(request_item)
 
     def test_llm_review_failure_falls_back_to_rule_based_triage(self) -> None:
+        zone = handler_module._clinic_timezone()
+        future_date = datetime.now(zone).date() + timedelta(days=7)
+        fallback_slot_label = (
+            f"{future_date:%A} {future_date.day} {future_date:%b}, "
+            "between 9:00 AM and 12:00 PM (45-minute Initial Consultation)"
+        )
         with (
             patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
             patch.object(
                 handler_module,
                 "_suggest_free_slot_labels",
-                return_value=["Monday 18 May, between 9:00 AM and 12:00 PM (45-minute Initial Consultation)"],
+                return_value=[fallback_slot_label],
             ),
             patch.object(
                 handler_module,
@@ -1207,7 +1213,7 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIsNotNone(request_item)
         request_item = cast(Any, request_item)
         self.assertEqual(request_item["request_type"], "appointment_request")
-        self.assertIn("Monday 18 May", request_item["draft_message"])
+        self.assertIn(f"{future_date:%A} {future_date.day} {future_date:%b}", request_item["draft_message"])
         self.assertFalse(request_item["request_constraints"]["llm_draft_used"])
         self.assertEqual(request_item["request_constraints"]["llm_review_status"], "error")
         self.assertEqual(request_item["request_constraints"]["llm_error"], "timeout")
