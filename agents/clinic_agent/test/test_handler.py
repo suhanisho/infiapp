@@ -1503,12 +1503,18 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIsNone(request_item)
 
     def test_llm_review_failure_falls_back_to_rule_based_triage(self) -> None:
+        zone = handler_module._clinic_timezone()
+        future_date = datetime.now(zone).date() + timedelta(days=7)
+        fallback_slot_label = (
+            f"{future_date:%A} {future_date.day} {future_date:%b}, "
+            "between 9:00 AM and 12:00 PM (45-minute Initial Consultation)"
+        )
         with (
             patch.object(handler_module, "_clinic_llm_enabled", return_value=True),
             patch.object(
                 handler_module,
                 "_suggest_free_slot_labels",
-                return_value=["Monday 18 May, between 9:00 AM and 12:00 PM (45-minute Initial Consultation)"],
+                return_value=[fallback_slot_label],
             ),
             patch.object(
                 handler_module,
@@ -1525,7 +1531,7 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertIsNotNone(request_item)
         request_item = cast(Any, request_item)
         self.assertEqual(request_item["request_type"], "appointment_request")
-        self.assertIn("Monday 18 May", request_item["draft_message"])
+        self.assertIn(f"{future_date:%A} {future_date.day} {future_date:%b}", request_item["draft_message"])
         self.assertFalse(request_item["request_constraints"]["llm_draft_used"])
         self.assertEqual(request_item["request_constraints"]["llm_review_status"], "error")
         self.assertEqual(request_item["request_constraints"]["llm_error"], "timeout")
@@ -1624,6 +1630,27 @@ class ClinicAgentTest(unittest.TestCase):
         candidate = cast(Any, candidate)
         self.assertTrue(candidate["available"])
         self.assertEqual(candidate["start_at"].hour, 16)
+        self.assertEqual(candidate["start_at"].minute, 30)
+
+    def test_booking_candidate_ignores_quoted_message_timestamp(self) -> None:
+        zone = handler_module._clinic_timezone()
+        target_date = datetime.now(zone).date() + timedelta(days=4)
+        message = (
+            f"Amazing! Wednesday {target_date.day}th at 9.30am works perfectly for us.\n"
+            f"On Sat, May 23, 2026 at 16:39 <shalinitest5@gmail.com> wrote:\n"
+            "> Subject: Re: Meet & greet"
+        )
+
+        with (
+            patch.object(handler_module, "_busy_schedule_windows", return_value=[]),
+            patch.object(handler_module, "_clinic_buffer_minutes", return_value=0),
+        ):
+            candidate = handler_module._booking_candidate_from_text(message, "Meet & Greet", 15)
+
+        self.assertIsNotNone(candidate)
+        candidate = cast(Any, candidate)
+        self.assertEqual(candidate["start_at"].date(), target_date)
+        self.assertEqual(candidate["start_at"].hour, 9)
         self.assertEqual(candidate["start_at"].minute, 30)
 
     def test_new_thread_slot_reply_can_match_single_waiting_request_by_sender(self) -> None:

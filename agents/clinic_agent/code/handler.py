@@ -4099,7 +4099,8 @@ def _overlaps(start_at: datetime, end_at: datetime, other_start_at: datetime, ot
 
 
 def _booking_candidate_from_text(text: str, appointment_kind: str, duration_minutes: int) -> BookingCandidate | None:
-    start_at = _booking_start_from_text(text)
+    visible_reply = _gmail_visible_reply_text(text)
+    start_at = _booking_start_from_text(visible_reply) if visible_reply else _booking_start_from_text(text)
     if start_at is None:
         return None
     end_at = start_at + timedelta(minutes=duration_minutes)
