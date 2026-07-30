@@ -1,14 +1,15 @@
 # Agent Development Notes
 
-This repo is being adapted into a doctor-facing clinic assistant for Dr.
-Shalini. Read this file first in a fresh Codex session, then read the fuller
-docs in `docs/`.
+This repo contains Nora, the doctor-facing clinic assistant for Dr. Shalini.
+Read this file first in a fresh Codex session, then read the fuller docs in
+`docs/`.
 
 ## Current Project Context
 
-- Fork: `https://github.com/suhanisho/infiapp`
+- Repository: `https://github.com/suhanisho/nora`
+- Legacy source: `https://github.com/suhanisho/infiapp/tree/build-clinic-mvp`
 - Upstream: `https://github.com/infiloop2/infiapp`
-- Working branch: `build-clinic-mvp`
+- Default branch: `main`
 - Production app: `https://shalini-clinic-webui.vercel.app`
 - Manual deploy workflow: `.github/workflows/deploy.yml`
 - Main product docs:
@@ -142,7 +143,7 @@ Calendar writes must:
 - Read `README.md` and the README files inside `agents/`, `webUI/`,
   `repo_tools/`, and `dynamodb/` when working in those areas.
 - Never push directly to `main`.
-- Keep changes on `build-clinic-mvp` unless the user asks otherwise.
+- Create a focused branch and pull request for changes to `main`.
 - Be careful with generated files. Edit specs first, then run codegen.
 - Do not edit generated files by hand unless fixing the generator itself.
 - Python dependencies are pinned in root `pyproject.toml`. Agent specs list
@@ -186,18 +187,21 @@ only change from the build, restore it before committing.
 
 ## Deploy Flow
 
-Deploys are manual GitHub Actions runs against `build-clinic-mvp`.
+Deploys are manual GitHub Actions runs against `main`.
+Before the first deploy from the renamed repository, recreate the GitHub
+Actions secrets and variables listed in `docs/session-handoff.md`. GitHub does
+not copy them when code moves to a new repository.
 
 ```sh
-git push origin build-clinic-mvp
-gh workflow run deploy.yml --repo suhanisho/infiapp --ref build-clinic-mvp
-gh run list --repo suhanisho/infiapp --workflow deploy.yml --branch build-clinic-mvp --limit 3
+git push origin <feature-branch>
+gh workflow run deploy.yml --repo suhanisho/nora --ref main
+gh run list --repo suhanisho/nora --workflow deploy.yml --branch main --limit 3
 ```
 
 Watch the run to completion and then health-check production:
 
 ```sh
-gh run watch <run-id> --repo suhanisho/infiapp --exit-status
+gh run watch <run-id> --repo suhanisho/nora --exit-status
 curl -I -L https://shalini-clinic-webui.vercel.app/
 ```
 

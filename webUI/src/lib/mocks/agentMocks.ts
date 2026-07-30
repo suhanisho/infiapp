@@ -44,6 +44,10 @@ type MockIntegration = {
   requiredScopes: string[];
   writeMode: string;
   connectedAt: string | null;
+  gmailImportStatus: string;
+  gmailImportProcessedCount: number;
+  gmailImportEstimatedTotal: number;
+  gmailImportStartedAt: string | null;
 };
 
 const nowIso = () => new Date().toISOString();
@@ -534,6 +538,10 @@ const integrations: MockIntegration[] = [
     ],
     writeMode: "read_source_book_after_approval",
     connectedAt: null,
+    gmailImportStatus: "not_started",
+    gmailImportProcessedCount: 0,
+    gmailImportEstimatedTotal: 0,
+    gmailImportStartedAt: null,
   },
   {
     integrationId: "gmail",
@@ -549,6 +557,10 @@ const integrations: MockIntegration[] = [
     ],
     writeMode: "read_inbox_send_after_approval",
     connectedAt: null,
+    gmailImportStatus: "not_started",
+    gmailImportProcessedCount: 0,
+    gmailImportEstimatedTotal: 0,
+    gmailImportStartedAt: null,
   },
 ];
 
@@ -610,6 +622,35 @@ function patientRequestFromAction(action: MockAction) {
     triageReason,
     urgencyLevel,
     updatedAt: action.updatedAt,
+  };
+}
+
+function conversationFromAction(action: MockAction) {
+  const threadId = action.sourceThreadId || action.sourceMessageId || action.actionId;
+  return {
+    conversationId: action.sourceThreadId
+      ? `gmail-thread-${action.sourceThreadId}`
+      : `gmail-message-${action.sourceMessageId || action.actionId}`,
+    createdAt: action.createdAt,
+    latestClassification:
+      typeof action.metadata.request_type === "string" ? action.metadata.request_type : action.actionType,
+    latestDraftRevisionId: action.draftMessage ? `${action.createdAt}#${action.sourceMessageId || action.actionId}#v1` : null,
+    latestMessageAt: action.updatedAt,
+    latestMessageDirection: action.status === "completed" ? "outbound" : "inbound",
+    latestMessageExcerpt: action.sourceMessage || action.sourceSummary,
+    latestMessageId: action.sourceMessageId || action.actionId,
+    patientEmail: null,
+    patientId: action.patientId,
+    patientName: action.patientName,
+    patientRequestId: action.patientRequestId,
+    practiceId: action.practiceId,
+    requiresDoctorReview: action.metadata.requires_doctor_review === true,
+    sourceProvider: action.sourceProvider,
+    sourceThreadId: action.sourceThreadId,
+    status: action.status,
+    subject: action.sourceSummary,
+    updatedAt: action.updatedAt,
+    threadId,
   };
 }
 
@@ -781,6 +822,71 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
       practiceId: mockPracticeId,
     };
   }
+  if (payload.action === "list_conversations") {
+    const conversations = actions
+      .filter((item) => item.sourceProvider === "gmail")
+      .map(conversationFromAction)
+      .sort((left, right) => right.latestMessageAt.localeCompare(left.latestMessageAt))
+      .map(({ threadId: _threadId, ...conversation }) => conversation);
+    const gmailIntegration = integrations.find((item) => item.integrationId === "gmail");
+    return {
+      conversations: clone(conversations),
+      estimatedTotal: gmailIntegration?.gmailImportEstimatedTotal || conversations.length,
+      importStatus: gmailIntegration?.gmailImportStatus || "not_started",
+      lastSyncAt: gmailIntegration?.lastSyncAt || null,
+      messagesProcessed: gmailIntegration?.gmailImportProcessedCount || 0,
+      practiceId: mockPracticeId,
+    };
+  }
+  if (payload.action === "get_conversation") {
+    const action = actions
+      .filter((item) => item.sourceProvider === "gmail")
+      .find((item) => conversationFromAction(item).conversationId === payload.conversationId);
+    if (!action) {
+      throw new Error(`conversation not found: ${String(payload.conversationId)}`);
+    }
+    const { threadId: _threadId, ...conversation } = conversationFromAction(action);
+    return {
+      conversation: clone(conversation),
+      draftRevisions: action.draftMessage
+        ? [
+            {
+              availabilityWindows: Array.isArray(action.metadata.proposed_windows)
+                ? action.metadata.proposed_windows
+                : [],
+              classification: conversation.latestClassification,
+              conversationId: conversation.conversationId,
+              createdAt: action.createdAt,
+              draftBody: action.draftMessage,
+              draftRevisionId: conversation.latestDraftRevisionId || `${action.actionId}#v1`,
+              llmModel: "",
+              llmStatus: "mock",
+              referencedSlotIds: [],
+              requestConstraints: {},
+              sourceMessageId: action.sourceMessageId || action.actionId,
+              status: "proposed",
+            },
+          ]
+        : [],
+      messages: [
+        {
+          bodyExcerpt: action.sourceMessage || action.sourceSummary,
+          classification: conversation.latestClassification,
+          direction: "inbound",
+          fromEmail: null,
+          fromName: action.patientName,
+          messageId: action.sourceMessageId || action.actionId,
+          processedAt: action.updatedAt,
+          receivedAt: action.createdAt,
+          subject: action.sourceSummary,
+          threadId: action.sourceThreadId,
+          toEmail: null,
+        },
+      ],
+      practiceId: mockPracticeId,
+      relatedActionId: action.actionId,
+    };
+  }
   if (payload.action === "approve_action") {
     return approveAction(payload);
   }
@@ -850,6 +956,10 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
       gmailIntegration.status = "connected";
       gmailIntegration.lastSyncAt = syncedAt;
       gmailIntegration.lastError = null;
+      gmailIntegration.gmailImportStatus = "complete";
+      gmailIntegration.gmailImportProcessedCount = actions.filter((item) => item.sourceProvider === "gmail").length;
+      gmailIntegration.gmailImportEstimatedTotal = gmailIntegration.gmailImportProcessedCount;
+      gmailIntegration.gmailImportStartedAt = gmailIntegration.gmailImportStartedAt || syncedAt;
     }
     const gmailActions = actions.filter((item) => item.sourceProvider === "gmail");
     return {
@@ -857,7 +967,12 @@ export async function callMockAgent(agentName: string, rawPayload: unknown): Pro
       sourceOfTruth: "gmail",
       writeMode: "read_inbox_prepare_in_app_drafts",
       externalWrites: 0,
+      estimatedTotal: gmailActions.length,
+      importComplete: true,
+      importStatus: "complete",
       messagesScanned: gmailActions.length,
+      messagesProcessed: gmailActions.length,
+      nextPageAvailable: false,
       proposedActions: gmailActions.length,
       message: "Gmail read completed. In-app action drafts were prepared; no email was sent or drafted in Gmail.",
       actions: clone(gmailActions),

@@ -78,6 +78,64 @@ class ClinicActionsPage(TypedDict):
     next_key: dict[str, Any] | None
 
 
+class ClinicConversationsItem(TypedDict):
+    """Typed representation of a row in the clinic_conversations table."""
+
+    conversation_id: str
+    created_at: str
+    latest_classification: str
+    latest_draft_revision_id: str
+    latest_message_at: str
+    latest_message_direction: str
+    latest_message_excerpt: str
+    latest_message_id: str
+    latest_message_sort_key: str
+    patient_email: str
+    patient_id: str
+    patient_name: str
+    patient_request_id: str
+    practice_id: str
+    requires_doctor_review: bool
+    source_provider: str
+    source_thread_id: str
+    status: str
+    subject: str
+    updated_at: str
+
+
+class ClinicConversationsPage(TypedDict):
+    """Paginated query result for the clinic_conversations table."""
+
+    items: list[ClinicConversationsItem]
+    next_key: dict[str, Any] | None
+
+
+class ClinicDraftRevisionsItem(TypedDict):
+    """Typed representation of a row in the clinic_draft_revisions table."""
+
+    availability_windows: list[Any]
+    classification: str
+    conversation_id: str
+    created_at: str
+    draft_body: str
+    draft_revision_id: str
+    llm_model: str
+    llm_status: str
+    practice_conversation_id: str
+    practice_id: str
+    referenced_slot_ids: list[Any]
+    request_constraints: dict[str, Any]
+    source_message_id: str
+    status: str
+
+
+class ClinicDraftRevisionsPage(TypedDict):
+    """Paginated query result for the clinic_draft_revisions table."""
+
+    items: list[ClinicDraftRevisionsItem]
+    next_key: dict[str, Any] | None
+
+
 class ClinicEmailMessagesItem(TypedDict):
     """Typed representation of a row in the clinic_email_messages table."""
 
@@ -118,6 +176,11 @@ class ClinicIntegrationsItem(TypedDict):
     clinic_id: str
     connected_at: str
     gmail_history_id: str
+    gmail_import_estimated_total: int | float
+    gmail_import_page_token: str
+    gmail_import_processed_count: int | float
+    gmail_import_started_at: str
+    gmail_import_status: str
     integration_id: str
     last_error: str
     last_sync_at: str
@@ -313,6 +376,68 @@ CLINIC_ACTIONS_TABLE: dict[str, Any] = {
     "table_name": "clinic_actions",
 }
 
+CLINIC_CONVERSATIONS_TABLE: dict[str, Any] = {
+    "attributes": {
+        "conversation_id": "String",
+        "created_at": "String",
+        "latest_classification": "String",
+        "latest_draft_revision_id": "String",
+        "latest_message_at": "String",
+        "latest_message_direction": "String",
+        "latest_message_excerpt": "String",
+        "latest_message_id": "String",
+        "latest_message_sort_key": "String",
+        "patient_email": "String",
+        "patient_id": "String",
+        "patient_name": "String",
+        "patient_request_id": "String",
+        "practice_id": "String",
+        "requires_doctor_review": "Boolean",
+        "source_provider": "String",
+        "source_thread_id": "String",
+        "status": "String",
+        "subject": "String",
+        "updated_at": "String",
+    },
+    "partition_key": {
+        "name": "practice_id",
+        "type": "String",
+    },
+    "sort_key": {
+        "name": "conversation_id",
+        "type": "String",
+    },
+    "table_name": "clinic_conversations",
+}
+
+CLINIC_DRAFT_REVISIONS_TABLE: dict[str, Any] = {
+    "attributes": {
+        "availability_windows": "List",
+        "classification": "String",
+        "conversation_id": "String",
+        "created_at": "String",
+        "draft_body": "String",
+        "draft_revision_id": "String",
+        "llm_model": "String",
+        "llm_status": "String",
+        "practice_conversation_id": "String",
+        "practice_id": "String",
+        "referenced_slot_ids": "List",
+        "request_constraints": "Map",
+        "source_message_id": "String",
+        "status": "String",
+    },
+    "partition_key": {
+        "name": "practice_conversation_id",
+        "type": "String",
+    },
+    "sort_key": {
+        "name": "draft_revision_id",
+        "type": "String",
+    },
+    "table_name": "clinic_draft_revisions",
+}
+
 CLINIC_EMAIL_MESSAGES_TABLE: dict[str, Any] = {
     "attributes": {
         "body_excerpt": "String",
@@ -354,6 +479,11 @@ CLINIC_INTEGRATIONS_TABLE: dict[str, Any] = {
         "clinic_id": "String",
         "connected_at": "String",
         "gmail_history_id": "String",
+        "gmail_import_estimated_total": "Number",
+        "gmail_import_page_token": "String",
+        "gmail_import_processed_count": "Number",
+        "gmail_import_started_at": "String",
+        "gmail_import_status": "String",
         "integration_id": "String",
         "last_error": "String",
         "last_sync_at": "String",
@@ -526,6 +656,8 @@ CLINIC_SETTINGS_TABLE: dict[str, Any] = {
 
 TABLES: dict[str, dict[str, Any]] = {
     "clinic_actions": CLINIC_ACTIONS_TABLE,
+    "clinic_conversations": CLINIC_CONVERSATIONS_TABLE,
+    "clinic_draft_revisions": CLINIC_DRAFT_REVISIONS_TABLE,
     "clinic_email_messages": CLINIC_EMAIL_MESSAGES_TABLE,
     "clinic_integrations": CLINIC_INTEGRATIONS_TABLE,
     "clinic_patient_requests": CLINIC_PATIENT_REQUESTS_TABLE,
@@ -545,6 +677,55 @@ def put_clinic_actions(
         dict[str, Any],
         _table(CLINIC_ACTIONS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
     )
+
+
+def put_clinic_actions_if_absent(
+    item: ClinicActionsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "clinic_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "action_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_ACTIONS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_actions_if_newer(
+    item: ClinicActionsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_actions item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_ACTIONS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def get_clinic_actions(
@@ -674,6 +855,380 @@ def query_clinic_actions(
 
 
 
+def put_clinic_conversations(
+    item: ClinicConversationsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_CONVERSATIONS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
+
+
+def put_clinic_conversations_if_absent(
+    item: ClinicConversationsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "practice_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "conversation_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_CONVERSATIONS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_conversations_if_newer(
+    item: ClinicConversationsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_conversations item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_CONVERSATIONS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def get_clinic_conversations(
+    practice_id: Any,
+    conversation_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicConversationsItem | None:
+    response = _table(
+        CLINIC_CONVERSATIONS_TABLE,
+        dynamodb_resource,
+    ).get_item(
+        Key=_build_key(
+            CLINIC_CONVERSATIONS_TABLE,
+            practice_id,
+            conversation_id,
+        )
+    )
+    item = response.get("Item")
+    return cast(ClinicConversationsItem, item) if isinstance(item, dict) else None
+
+
+def query_clinic_conversations_item(
+    practice_id: Any,
+    conversation_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicConversationsItem | None:
+    return get_clinic_conversations(
+        practice_id,
+        conversation_id,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+
+def delete_clinic_conversations(
+    practice_id: Any,
+    conversation_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_CONVERSATIONS_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                CLINIC_CONVERSATIONS_TABLE,
+                practice_id,
+                conversation_id,
+            )
+        ),
+    )
+
+
+def query_clinic_conversations_by_conversation_id_range_page(
+    practice_id: Any,
+    *,
+    start_conversation_id: Any | None = None,
+    end_conversation_id: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> ClinicConversationsPage:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("practice_id").eq(practice_id)
+    if start_conversation_id is not None and end_conversation_id is not None:
+        key_condition = key_condition & Key("conversation_id").between(start_conversation_id, end_conversation_id)
+    elif start_conversation_id is not None:
+        key_condition = key_condition & Key("conversation_id").gte(start_conversation_id)
+    elif end_conversation_id is not None:
+        key_condition = key_condition & Key("conversation_id").lte(end_conversation_id)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(CLINIC_CONVERSATIONS_TABLE, dynamodb_resource).query(**query_args)
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(ClinicConversationsItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_clinic_conversations_by_conversation_id_range(
+    practice_id: Any,
+    *,
+    start_conversation_id: Any | None = None,
+    end_conversation_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicConversationsItem]:
+    return query_clinic_conversations_by_conversation_id_range_page(
+        practice_id,
+        start_conversation_id=start_conversation_id,
+        end_conversation_id=end_conversation_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
+
+
+def query_clinic_conversations(
+    practice_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicConversationsItem]:
+    return query_clinic_conversations_by_conversation_id_range(
+        practice_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )
+
+
+
+def put_clinic_draft_revisions(
+    item: ClinicDraftRevisionsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_DRAFT_REVISIONS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
+    )
+
+
+def put_clinic_draft_revisions_if_absent(
+    item: ClinicDraftRevisionsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "practice_conversation_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "draft_revision_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_DRAFT_REVISIONS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_draft_revisions_if_newer(
+    item: ClinicDraftRevisionsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_draft_revisions item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_DRAFT_REVISIONS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def get_clinic_draft_revisions(
+    practice_conversation_id: Any,
+    draft_revision_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicDraftRevisionsItem | None:
+    response = _table(
+        CLINIC_DRAFT_REVISIONS_TABLE,
+        dynamodb_resource,
+    ).get_item(
+        Key=_build_key(
+            CLINIC_DRAFT_REVISIONS_TABLE,
+            practice_conversation_id,
+            draft_revision_id,
+        )
+    )
+    item = response.get("Item")
+    return cast(ClinicDraftRevisionsItem, item) if isinstance(item, dict) else None
+
+
+def query_clinic_draft_revisions_item(
+    practice_conversation_id: Any,
+    draft_revision_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> ClinicDraftRevisionsItem | None:
+    return get_clinic_draft_revisions(
+        practice_conversation_id,
+        draft_revision_id,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+
+def delete_clinic_draft_revisions(
+    practice_conversation_id: Any,
+    draft_revision_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        _table(CLINIC_DRAFT_REVISIONS_TABLE, dynamodb_resource).delete_item(
+            Key=_build_key(
+                CLINIC_DRAFT_REVISIONS_TABLE,
+                practice_conversation_id,
+                draft_revision_id,
+            )
+        ),
+    )
+
+
+def query_clinic_draft_revisions_by_draft_revision_id_range_page(
+    practice_conversation_id: Any,
+    *,
+    start_draft_revision_id: Any | None = None,
+    end_draft_revision_id: Any | None = None,
+    exclusive_start_key: Mapping[str, Any] | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> ClinicDraftRevisionsPage:
+    from boto3.dynamodb.conditions import Key
+
+    key_condition = Key("practice_conversation_id").eq(practice_conversation_id)
+    if start_draft_revision_id is not None and end_draft_revision_id is not None:
+        key_condition = key_condition & Key("draft_revision_id").between(start_draft_revision_id, end_draft_revision_id)
+    elif start_draft_revision_id is not None:
+        key_condition = key_condition & Key("draft_revision_id").gte(start_draft_revision_id)
+    elif end_draft_revision_id is not None:
+        key_condition = key_condition & Key("draft_revision_id").lte(end_draft_revision_id)
+    query_args: dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "ScanIndexForward": scan_index_forward,
+        "ConsistentRead": consistent_read,
+    }
+    if exclusive_start_key is not None:
+        query_args["ExclusiveStartKey"] = dict(exclusive_start_key)
+    if limit is not None:
+        query_args["Limit"] = limit
+    response = _table(CLINIC_DRAFT_REVISIONS_TABLE, dynamodb_resource).query(**query_args)
+    next_key = response.get("LastEvaluatedKey")
+    return {
+        "items": [cast(ClinicDraftRevisionsItem, item) for item in response.get("Items", [])],
+        "next_key": dict(next_key) if isinstance(next_key, dict) else None,
+    }
+
+
+def query_clinic_draft_revisions_by_draft_revision_id_range(
+    practice_conversation_id: Any,
+    *,
+    start_draft_revision_id: Any | None = None,
+    end_draft_revision_id: Any | None = None,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicDraftRevisionsItem]:
+    return query_clinic_draft_revisions_by_draft_revision_id_range_page(
+        practice_conversation_id,
+        start_draft_revision_id=start_draft_revision_id,
+        end_draft_revision_id=end_draft_revision_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )["items"]
+
+
+def query_clinic_draft_revisions(
+    practice_conversation_id: Any,
+    *,
+    dynamodb_resource: Any | None = None,
+    scan_index_forward: bool = True,
+    consistent_read: bool = False,
+    limit: int | None = None,
+) -> list[ClinicDraftRevisionsItem]:
+    return query_clinic_draft_revisions_by_draft_revision_id_range(
+        practice_conversation_id,
+        dynamodb_resource=dynamodb_resource,
+        scan_index_forward=scan_index_forward,
+        consistent_read=consistent_read,
+        limit=limit,
+    )
+
+
+
 def put_clinic_email_messages(
     item: ClinicEmailMessagesItem,
     *,
@@ -683,6 +1238,55 @@ def put_clinic_email_messages(
         dict[str, Any],
         _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).put_item(Item=dict(item)),
     )
+
+
+def put_clinic_email_messages_if_absent(
+    item: ClinicEmailMessagesItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "practice_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "gmail_message_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_email_messages_if_newer(
+    item: ClinicEmailMessagesItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_email_messages item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_EMAIL_MESSAGES_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def get_clinic_email_messages(
@@ -823,6 +1427,55 @@ def put_clinic_integrations(
     )
 
 
+def put_clinic_integrations_if_absent(
+    item: ClinicIntegrationsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "clinic_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "integration_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_INTEGRATIONS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_integrations_if_newer(
+    item: ClinicIntegrationsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_integrations item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_INTEGRATIONS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
 def get_clinic_integrations(
     clinic_id: Any,
     integration_id: Any,
@@ -959,6 +1612,55 @@ def put_clinic_patient_requests(
         dict[str, Any],
         _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
     )
+
+
+def put_clinic_patient_requests_if_absent(
+    item: ClinicPatientRequestsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "practice_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "patient_request_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_patient_requests_if_newer(
+    item: ClinicPatientRequestsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_patient_requests item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_PATIENT_REQUESTS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def get_clinic_patient_requests(
@@ -1099,6 +1801,55 @@ def put_clinic_patients(
     )
 
 
+def put_clinic_patients_if_absent(
+    item: ClinicPatientsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "clinic_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "patient_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_PATIENTS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_patients_if_newer(
+    item: ClinicPatientsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_patients item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_PATIENTS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
 def get_clinic_patients(
     clinic_id: Any,
     patient_id: Any,
@@ -1235,6 +1986,55 @@ def put_clinic_practice_members(
         dict[str, Any],
         _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
     )
+
+
+def put_clinic_practice_members_if_absent(
+    item: ClinicPracticeMembersItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "practice_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "member_email"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_practice_members_if_newer(
+    item: ClinicPracticeMembersItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_practice_members item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_PRACTICE_MEMBERS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def get_clinic_practice_members(
@@ -1375,6 +2175,55 @@ def put_clinic_schedule(
     )
 
 
+def put_clinic_schedule_if_absent(
+    item: ClinicScheduleItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "clinic_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "event_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_SCHEDULE_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_schedule_if_newer(
+    item: ClinicScheduleItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_schedule item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_SCHEDULE_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
 def get_clinic_schedule(
     clinic_id: Any,
     event_id: Any,
@@ -1511,6 +2360,55 @@ def put_clinic_settings(
         dict[str, Any],
         _table(CLINIC_SETTINGS_TABLE, dynamodb_resource).put_item(Item=dict(item)),
     )
+
+
+def put_clinic_settings_if_absent(
+    item: ClinicSettingsItem,
+    *,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    expression_attribute_names = {"#partition_key": "clinic_id"}
+    condition_expression = "attribute_not_exists(#partition_key)"
+    expression_attribute_names["#sort_key"] = "setting_id"
+    condition_expression += " AND attribute_not_exists(#sort_key)"
+    try:
+        _table(CLINIC_SETTINGS_TABLE, dynamodb_resource).put_item(
+            Item=dict(item),
+            ConditionExpression=condition_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
+
+
+def put_clinic_settings_if_newer(
+    item: ClinicSettingsItem,
+    *,
+    ordering_attribute: str,
+    dynamodb_resource: Any | None = None,
+) -> bool:
+    item_dict = dict(item)
+    if ordering_attribute not in item_dict:
+        raise ValueError(f"clinic_settings item does not contain {ordering_attribute}.")
+    try:
+        _table(CLINIC_SETTINGS_TABLE, dynamodb_resource).put_item(
+            Item=item_dict,
+            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",
+            ExpressionAttributeNames={"#ordering": ordering_attribute},
+            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        error = response.get("Error") if isinstance(response, dict) else None
+        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def get_clinic_settings(

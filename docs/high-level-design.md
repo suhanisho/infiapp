@@ -1,6 +1,6 @@
-# Dr. Shalini Clinic App High-Level Design
+# Nora Clinic Assistant High-Level Design
 
-Last updated: 2026-05-16
+Last updated: 2026-07-29
 
 This document records the current product and system design for the clinic app.
 It is meant to be readable by a new contributor, a future Codex session, or
@@ -8,7 +8,7 @@ future-you coming back after a break.
 
 ## Product Purpose
 
-The app is a doctor-facing assistant for managing patient communication and
+Nora is a doctor-facing assistant for managing patient communication and
 appointment-related requests.
 
 The core idea is:
@@ -114,8 +114,11 @@ erDiagram
     PRACTICE ||--o{ PATIENT : has
     PRACTICE ||--o{ PATIENT_REQUEST : receives
     PRACTICE ||--o{ EMAIL_MESSAGE : observes
+    PRACTICE ||--o{ CONVERSATION : projects
     PATIENT ||--o{ PATIENT_REQUEST : linked_by_patient_id
     PATIENT_REQUEST ||--o{ EMAIL_MESSAGE : has
+    PATIENT_REQUEST ||--o{ CONVERSATION : summarized_by
+    CONVERSATION ||--o{ DRAFT_REVISION : preserves
     PATIENT_REQUEST ||--o{ ACTION : has
     PRACTICE ||--o{ SCHEDULE_EVENT : caches
     PRACTICE ||--o{ INTEGRATION : connects
@@ -209,6 +212,36 @@ Design decision:
   duplicate instead of creating a second request.
 - This table lets the scanner distinguish a new request from a reply in an
   existing thread.
+
+### `clinic_conversations`
+
+This is the read-optimized Inbox projection. It stores one latest-state row per
+Gmail thread, keyed by:
+
+- `practice_id`
+- `conversation_id`
+
+The row contains the latest message timestamp, direction, excerpt,
+classification, linked patient/request, workflow status, and latest draft
+revision id. A conditional newer-only write prevents a delayed or retried older
+message from moving a conversation backwards.
+
+The Gmail message ledger remains the immutable source for conversation history;
+this table is a projection for fast Inbox listing rather than a second source of
+truth.
+
+### `clinic_draft_revisions`
+
+This table preserves the draft produced for each relevant inbound message,
+keyed by:
+
+- `practice_conversation_id`
+- `draft_revision_id`
+
+Draft revisions are create-only and include the classification, request
+constraints, calendar availability windows, model status, and proposed reply
+body. Reprocessing the same Gmail message cannot overwrite the first stored
+revision.
 
 ### `clinic_actions`
 
@@ -335,9 +368,12 @@ sequenceDiagram
     participant Gmail as Gmail API
     participant DB as DynamoDB
 
-    User->>Web: Click "Scan Gmail"
-    Web->>Lambda: scan_gmail_inbox with signed actor assertion
-    Lambda->>Gmail: Read recent inbox messages and full message content
+    User->>Web: Start or resume 30-day Gmail import
+    loop One bounded page per request
+        Web->>Lambda: scan_gmail_inbox with signed actor assertion
+        Lambda->>Gmail: Read one page and full message content
+        Lambda->>DB: Persist continuation token and progress
+    end
     Lambda->>DB: Check processed Gmail message ledger
     Lambda->>Lambda: Filter obvious non-patient email
     Lambda->>Lambda: Resolve new request vs existing thread reply
@@ -346,11 +382,21 @@ sequenceDiagram
     Lambda->>DB: Record processed Gmail message
     Lambda->>DB: Upsert patient_request
     Lambda->>DB: Upsert linked review or booking action
-    Lambda->>Web: Return requests/actions for review
+    Lambda->>DB: Project conversation and immutable draft revision
+    Lambda->>Web: Return progress and conversations for review
 ```
 
 Current Gmail behavior:
 
+- Imports the most recent 30 days through bounded Gmail-thread pages and
+  processes each thread oldest-to-newest. This prevents a historical patient
+  slot-selection reply from being interpreted before the request that preceded
+  it. Import progress is stored on the Gmail integration, so a refresh or failed
+  request can resume without a queue or background worker.
+- Uses a smaller page when LLM review is enabled to stay inside the current
+  30-second Lambda timeout. Within a historical thread, deterministic logic
+  reconstructs the earlier state and the LLM is reserved for the latest
+  unprocessed inbound message.
 - Lists recent inbox messages, then fetches full read-only message content.
 - Checks `clinic_email_messages` first so already-seen Gmail messages and
   duplicate patient messages do not create duplicate requests.
@@ -366,6 +412,9 @@ Current Gmail behavior:
   remain the fallback.
 - Creates or updates `clinic_patient_requests`.
 - Creates or updates a linked child action in `clinic_actions`.
+- Projects each non-duplicate Gmail thread into one `clinic_conversations` row
+  and stores each generated reply as an immutable `clinic_draft_revisions`
+  record.
 - Classifies likely patient messages into triage categories such as appointment
   request, reschedule/cancellation, urgent clinical concern, routine clinical
   question, test/report/result query, prescription/admin request,
@@ -461,7 +510,7 @@ Current visual principles:
   Today Briefing card and open action cards.
 - Use darker teal (`#0F6E56` and `#1D9E75`) for brand/action accents so the
   mint family still meets contrast expectations on cream.
-- Keep a single dark navy serif `S` logo block as a brand signature, not as the
+- Keep a single dark navy serif `N` logo block as a brand signature, not as the
   overall color scheme.
 - Use larger default type and medium text weight for body copy, names, section
   labels, and times.
@@ -493,6 +542,22 @@ New empty practices see a first-run onboarding screen that guides the user
 through Google connection, Calendar read, and Gmail scan. The screen disappears
 after synced workspace data exists or the user chooses to open the empty
 workspace.
+
+## Inbox
+
+Inbox is the second tab and presents one row per Gmail conversation, ordered by
+the latest message. A patient follow-up in an existing Gmail thread updates the
+same conversation and moves it back to the top instead of creating a duplicate
+conversation.
+
+Opening a conversation shows its stored inbound/outbound message excerpts,
+latest calendar-aware AI draft, availability windows used, and earlier draft
+revisions. Sending and booking remain in the shared Rounds approval workflow;
+the Inbox review button opens the exact linked Rounds action.
+
+The Inbox also owns the visible progress and resume state for the initial
+30-day Gmail import. Import is read-only with respect to Gmail and does not send,
+draft, label, archive, or delete messages.
 
 ## Calendar Flow
 
@@ -671,14 +736,18 @@ Local/development:
 
 ## Deployment Model
 
-Current repo:
+Current repository:
 
-- Fork: `https://github.com/suhanisho/infiapp`
-- Branch: `build-clinic-mvp`
+- Repository: `https://github.com/suhanisho/nora`
+- Legacy source: `https://github.com/suhanisho/infiapp/tree/build-clinic-mvp`
+- Branch: `main`
 - Production app: `https://shalini-clinic-webui.vercel.app`
 - Deploy workflow: `.github/workflows/deploy.yml`
 
-Deploys are triggered manually from GitHub Actions against `build-clinic-mvp`.
+Future deploys are triggered manually from GitHub Actions against `main`.
+The current production version was deployed from the legacy repository. The
+existing `shalini-clinic` infrastructure and Vercel identifiers are retained to
+preserve production data and integrations.
 
 The deploy workflow updates:
 

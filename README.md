@@ -1,6 +1,8 @@
-# Dr. Shalini's Clinic
+# Nora
 
-Dr. Shalini's Clinic is a minimal, opinionated framework for building web applications. It abstracts infrastructure deployment and management into maintainable, secure repo conventions so builders can vibe code applications with a practical level of production readiness.
+Nora is Dr. Shalini's doctor-facing clinic assistant. It organizes patient requests from Gmail, reads Google Calendar for scheduling context, prepares draft replies, and keeps every external action behind explicit doctor approval.
+
+The existing `shalini-clinic` infrastructure identifiers are intentionally retained so the renamed app continues to use the current production deployment and data.
 
 The framework keeps four concepts small and explicit:
 
@@ -95,12 +97,6 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 ```
 
-Rename the starter app before building on it:
-
-```bash
-python -m repo_tools rename-app my-app-name --title "My App Name"
-```
-
 Install Python dependencies:
 
 ```bash
@@ -160,7 +156,7 @@ Create the Google OAuth secrets:
 7. Add the allowed clinic Google accounts as a comma-separated GitHub repository variable named `CLINIC_ALLOWED_EMAILS`.
 8. Optionally add `NEXTAUTH_URL` and `GOOGLE_TOKEN_SECRET_PREFIX` as GitHub repository variables.
 
-No need to install the Vercel GitHub app for this repo. Dr. Shalini's Clinic deploys the WebUI from the GitHub Actions deploy workflow.
+No need to install the Vercel GitHub app for this repo. Nora deploys the WebUI from the GitHub Actions deploy workflow.
 
 Add all secrets in GitHub under **Repository > Settings > Secrets and variables > Actions > Repository secrets**.
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import html
 import json
 import os
 import re
@@ -20,13 +19,23 @@ from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
 from email.message import EmailMessage
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import parseaddr
 from email.utils import formatdate
 from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from clinic_features.contracts import NormalizedEmail
+from clinic_features.email_parser import (
+    gmail_headers as _gmail_headers,
+    normalized_message_signature as _normalized_message_signature,
+    parse_gmail_message,
+    visible_reply_text as _gmail_visible_reply_text,
+)
+from clinic_features.conversation_store import persist_conversation_message as _persist_conversation_message
 from generated.dynamodb import (
     ClinicActionsItem,
+    ClinicConversationsItem,
+    ClinicDraftRevisionsItem,
     ClinicEmailMessagesItem,
     ClinicIntegrationsItem,
     ClinicPatientRequestsItem,
@@ -36,6 +45,7 @@ from generated.dynamodb import (
     ClinicSettingsItem,
     delete_clinic_schedule,
     get_clinic_actions,
+    get_clinic_conversations,
     get_clinic_email_messages,
     get_clinic_integrations,
     get_clinic_patient_requests,
@@ -49,14 +59,23 @@ from generated.dynamodb import (
     put_clinic_schedule,
     put_clinic_settings,
     query_clinic_actions,
+    query_clinic_conversations_by_conversation_id_range_page,
+    query_clinic_draft_revisions_by_draft_revision_id_range_page,
     query_clinic_email_messages,
+    query_clinic_email_messages_by_gmail_message_id_range_page,
     query_clinic_integrations,
     query_clinic_patient_requests,
     query_clinic_patients,
     query_clinic_schedule,
     query_clinic_settings,
 )
-from google_workspace import GoogleWorkspaceError, GoogleWorkspaceHttpClient, refresh_google_access_token, required_google_scopes
+from google_workspace import (
+    GmailMessagePage,
+    GoogleWorkspaceError,
+    GoogleWorkspaceHttpClient,
+    refresh_google_access_token,
+    required_google_scopes,
+)
 from response import json_response
 
 LEGACY_CLINIC_ID = "shalini-clinic"
@@ -71,7 +90,8 @@ GMAIL_SEND_AND_BOOK_COMPLETION_NOTE = (
 DEFAULT_CLINIC_TIMEZONE = "Europe/London"
 CALENDAR_SYNC_DAYS = 14
 GMAIL_SCAN_QUERY = "in:inbox newer_than:30d -category:promotions -category:social"
-GMAIL_SCAN_MAX_MESSAGES = 25
+GMAIL_IMPORT_PAGE_SIZE_WITH_LLM = 1
+GMAIL_IMPORT_PAGE_SIZE_WITHOUT_LLM = 10
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_CLINIC_LLM_MODEL = "gpt-5.4-nano"
 CLINIC_LLM_TIMEOUT_SECONDS = 20
@@ -425,24 +445,6 @@ class BookingCandidate(TypedDict):
 class SentGmailReply(TypedDict):
     sent_message_id: str
     recipient: str
-
-
-class GmailMessageContext(TypedDict):
-    gmail_message_id: str
-    gmail_thread_id: str
-    message_id_header: str
-    in_reply_to: str
-    references: str
-    sender_name: str
-    sender_email: str
-    subject: str
-    snippet: str
-    message_text: str
-    source_excerpt: str
-    summary: str
-    received_at: datetime
-    time_label: str
-    message_signature: str
 
 
 def _practice_id() -> str:
@@ -909,6 +911,11 @@ SEED_INTEGRATIONS: list[ClinicIntegrationsItem] = [
         "calendar_id": "primary",
         "calendar_sync_token": "",
         "gmail_history_id": "",
+        "gmail_import_estimated_total": 0,
+        "gmail_import_page_token": "",
+        "gmail_import_processed_count": 0,
+        "gmail_import_started_at": "",
+        "gmail_import_status": "not_started",
         "required_scopes": GOOGLE_SCOPES["google_calendar"],
         "write_mode": "read_source_book_after_approval",
         "token_secret_id": "",
@@ -926,6 +933,11 @@ SEED_INTEGRATIONS: list[ClinicIntegrationsItem] = [
         "calendar_id": "",
         "calendar_sync_token": "",
         "gmail_history_id": "",
+        "gmail_import_estimated_total": 0,
+        "gmail_import_page_token": "",
+        "gmail_import_processed_count": 0,
+        "gmail_import_started_at": "",
+        "gmail_import_status": "not_started",
         "required_scopes": GOOGLE_SCOPES["gmail"],
         "write_mode": "read_inbox_send_after_approval",
         "token_secret_id": "",
@@ -1195,6 +1207,174 @@ def _integration_dto(item: ClinicIntegrationsItem) -> dict[str, Any]:
         "requiredScopes": [str(scope) for scope in scopes],
         "writeMode": item["write_mode"],
         "connectedAt": _optional_text(item["connected_at"]),
+        "gmailImportStatus": str(item.get("gmail_import_status", "not_started")),
+        "gmailImportProcessedCount": int(item.get("gmail_import_processed_count", 0)),
+        "gmailImportEstimatedTotal": int(item.get("gmail_import_estimated_total", 0)),
+        "gmailImportStartedAt": _optional_text(item.get("gmail_import_started_at")),
+    }
+
+
+def _conversation_dto(item: ClinicConversationsItem) -> dict[str, Any]:
+    return {
+        "conversationId": item["conversation_id"],
+        "practiceId": item["practice_id"],
+        "sourceProvider": item["source_provider"],
+        "sourceThreadId": _optional_text(item["source_thread_id"]),
+        "patientId": _optional_text(item["patient_id"]),
+        "patientName": _optional_text(item["patient_name"]),
+        "patientEmail": _optional_text(item["patient_email"]),
+        "patientRequestId": _optional_text(item["patient_request_id"]),
+        "subject": item["subject"],
+        "latestMessageId": item["latest_message_id"],
+        "latestMessageExcerpt": item["latest_message_excerpt"],
+        "latestMessageAt": item["latest_message_at"],
+        "latestMessageDirection": item["latest_message_direction"],
+        "latestClassification": item["latest_classification"],
+        "latestDraftRevisionId": _optional_text(item["latest_draft_revision_id"]),
+        "status": item["status"],
+        "requiresDoctorReview": item["requires_doctor_review"],
+        "createdAt": item["created_at"],
+        "updatedAt": item["updated_at"],
+    }
+
+
+def _draft_revision_dto(item: ClinicDraftRevisionsItem) -> dict[str, Any]:
+    return {
+        "draftRevisionId": item["draft_revision_id"],
+        "conversationId": item["conversation_id"],
+        "sourceMessageId": item["source_message_id"],
+        "classification": item["classification"],
+        "requestConstraints": item["request_constraints"],
+        "availabilityWindows": item["availability_windows"],
+        "referencedSlotIds": item["referenced_slot_ids"],
+        "draftBody": item["draft_body"],
+        "llmStatus": item["llm_status"],
+        "llmModel": item["llm_model"],
+        "status": item["status"],
+        "createdAt": item["created_at"],
+    }
+
+
+def _email_message_dto(item: ClinicEmailMessagesItem) -> dict[str, Any]:
+    return {
+        "messageId": item["gmail_message_id"],
+        "threadId": _optional_text(item["gmail_thread_id"]),
+        "direction": item["direction"],
+        "fromEmail": _optional_text(item["from_email"]),
+        "fromName": _optional_text(item["from_name"]),
+        "toEmail": _optional_text(item["to_email"]),
+        "subject": item["subject"],
+        "bodyExcerpt": item["body_excerpt"],
+        "classification": item["classification"],
+        "receivedAt": item["received_at"],
+        "processedAt": item["processed_at"],
+    }
+
+
+def _all_conversation_items() -> list[ClinicConversationsItem]:
+    items: list[ClinicConversationsItem] = []
+    next_key: dict[str, Any] | None = None
+    while True:
+        page = query_clinic_conversations_by_conversation_id_range_page(
+            _practice_id(),
+            exclusive_start_key=next_key,
+            scan_index_forward=True,
+            consistent_read=True,
+        )
+        items.extend(page["items"])
+        next_key = page["next_key"]
+        if next_key is None:
+            return items
+
+
+def _all_email_message_items() -> list[ClinicEmailMessagesItem]:
+    items: list[ClinicEmailMessagesItem] = []
+    next_key: dict[str, Any] | None = None
+    while True:
+        page = query_clinic_email_messages_by_gmail_message_id_range_page(
+            _practice_id(),
+            exclusive_start_key=next_key,
+            scan_index_forward=True,
+            consistent_read=True,
+        )
+        items.extend(page["items"])
+        next_key = page["next_key"]
+        if next_key is None:
+            return items
+
+
+def _all_draft_revision_items(conversation_id: str) -> list[ClinicDraftRevisionsItem]:
+    items: list[ClinicDraftRevisionsItem] = []
+    next_key: dict[str, Any] | None = None
+    while True:
+        page = query_clinic_draft_revisions_by_draft_revision_id_range_page(
+            f"{_practice_id()}#{conversation_id}",
+            exclusive_start_key=next_key,
+            scan_index_forward=True,
+            consistent_read=True,
+        )
+        items.extend(page["items"])
+        next_key = page["next_key"]
+        if next_key is None:
+            return items
+
+
+def _gmail_import_dto() -> dict[str, Any]:
+    integration = get_clinic_integrations(_clinic_id(), "gmail")
+    if integration is None:
+        return {
+            "importStatus": "not_started",
+            "messagesProcessed": 0,
+            "estimatedTotal": 0,
+            "lastSyncAt": None,
+        }
+    return {
+        "importStatus": str(integration.get("gmail_import_status", "not_started")),
+        "messagesProcessed": int(integration.get("gmail_import_processed_count", 0)),
+        "estimatedTotal": int(integration.get("gmail_import_estimated_total", 0)),
+        "lastSyncAt": _optional_text(integration["last_sync_at"]),
+    }
+
+
+def _list_conversations() -> dict[str, Any]:
+    items = sorted(_all_conversation_items(), key=lambda item: item["latest_message_sort_key"], reverse=True)
+    return {
+        "conversations": [_conversation_dto(item) for item in items],
+        "practiceId": _practice_id(),
+        **_gmail_import_dto(),
+    }
+
+
+def _get_conversation(conversation_id: str) -> dict[str, Any]:
+    item = get_clinic_conversations(_practice_id(), conversation_id)
+    if item is None:
+        return {"error": f"conversation not found: {conversation_id}"}
+    thread_id = item["source_thread_id"]
+    messages = [
+        message
+        for message in _all_email_message_items()
+        if (
+            (thread_id and message["gmail_thread_id"] == thread_id)
+            or (not thread_id and message["gmail_message_id"] == item["latest_message_id"])
+        )
+    ]
+    messages.sort(key=lambda message: (message["received_at"], message["gmail_message_id"]))
+    revisions = sorted(
+        _all_draft_revision_items(conversation_id),
+        key=lambda revision: revision["draft_revision_id"],
+    )
+    related_actions = [
+        action
+        for action in _list_action_items()
+        if action["patient_request_id"] == item["patient_request_id"]
+    ]
+    related_actions.sort(key=lambda action: action["updated_at"], reverse=True)
+    return {
+        "conversation": _conversation_dto(item),
+        "messages": [_email_message_dto(message) for message in messages],
+        "draftRevisions": [_draft_revision_dto(revision) for revision in revisions],
+        "relatedActionId": related_actions[0]["action_id"] if related_actions else None,
+        "practiceId": _practice_id(),
     }
 
 
@@ -1517,28 +1697,27 @@ def _approve_and_send_gmail(action_id: str, approved_by: str, final_message: str
     )
     put_clinic_actions(updated)
     if patient_request is not None:
-        put_clinic_patient_requests(
-            _patient_request_update_after_gmail_send(
-                patient_request=patient_request,
-                action=item,
-                approved_by=approved_by,
-                final_text=final_text,
-                sent_reply=sent_reply,
-                now=now,
-            )
+        updated_request = _patient_request_update_after_gmail_send(
+            patient_request=patient_request,
+            action=item,
+            approved_by=approved_by,
+            final_text=final_text,
+            sent_reply=sent_reply,
+            now=now,
         )
-        put_clinic_email_messages(
-            _sent_message_record_item(
-                gmail_message_id=sent_reply["sent_message_id"],
-                gmail_thread_id=item["source_thread_id"],
-                patient_request_id=patient_request_id,
-                patient_id=item["patient_id"],
-                recipient=sent_reply["recipient"],
-                subject=item["source_summary"],
-                body=final_text,
-                processed_at=now,
-            )
+        put_clinic_patient_requests(updated_request)
+        sent_message_record = _sent_message_record_item(
+            gmail_message_id=sent_reply["sent_message_id"],
+            gmail_thread_id=item["source_thread_id"],
+            patient_request_id=patient_request_id,
+            patient_id=item["patient_id"],
+            recipient=sent_reply["recipient"],
+            subject=item["source_summary"],
+            body=final_text,
+            processed_at=now,
         )
+        put_clinic_email_messages(sent_message_record)
+        _persist_sent_conversation_message(request=updated_request, message=sent_message_record)
     return {
         "action": _action_dto(updated),
         "externalWrites": 1,
@@ -1805,39 +1984,38 @@ def _approve_send_and_book_calendar(action_id: str, approved_by: str, final_mess
     )
     put_clinic_actions(updated)
     if patient_request is not None:
-        put_clinic_patient_requests(
-            cast(
-                ClinicPatientRequestsItem,
-                {
-                    **patient_request,
-                    "status": "completed",
-                    "approved_at": now,
-                    "approved_by": approved_by,
-                    "completed_at": now,
-                    "completion_note": GMAIL_SEND_AND_BOOK_COMPLETION_NOTE,
-                    "final_message": final_text,
-                    "request_constraints": {
-                        **patient_request["request_constraints"],
-                        "last_sent_gmail_message_id": sent_reply["sent_message_id"],
-                        "external_calendar_event_id": calendar_event_id,
-                        "conversation_stage": "booked",
-                    },
-                    "updated_at": now,
+        updated_request = cast(
+            ClinicPatientRequestsItem,
+            {
+                **patient_request,
+                "status": "completed",
+                "approved_at": now,
+                "approved_by": approved_by,
+                "completed_at": now,
+                "completion_note": GMAIL_SEND_AND_BOOK_COMPLETION_NOTE,
+                "final_message": final_text,
+                "request_constraints": {
+                    **patient_request["request_constraints"],
+                    "last_sent_gmail_message_id": sent_reply["sent_message_id"],
+                    "external_calendar_event_id": calendar_event_id,
+                    "conversation_stage": "booked",
                 },
-            )
+                "updated_at": now,
+            },
         )
-        put_clinic_email_messages(
-            _sent_message_record_item(
-                gmail_message_id=sent_reply["sent_message_id"],
-                gmail_thread_id=item["source_thread_id"],
-                patient_request_id=item["patient_request_id"],
-                patient_id=item["patient_id"],
-                recipient=sent_reply["recipient"],
-                subject=item["source_summary"],
-                body=final_text,
-                processed_at=now,
-            )
+        put_clinic_patient_requests(updated_request)
+        sent_message_record = _sent_message_record_item(
+            gmail_message_id=sent_reply["sent_message_id"],
+            gmail_thread_id=item["source_thread_id"],
+            patient_request_id=item["patient_request_id"],
+            patient_id=item["patient_id"],
+            recipient=sent_reply["recipient"],
+            subject=item["source_summary"],
+            body=final_text,
+            processed_at=now,
         )
+        put_clinic_email_messages(sent_message_record)
+        _persist_sent_conversation_message(request=updated_request, message=sent_message_record)
     return {
         "action": _action_dto(updated),
         "calendarEventId": calendar_event_id,
@@ -2150,6 +2328,11 @@ def _connected_integration(
         "calendar_id": "primary" if integration_id == "google_calendar" else "",
         "calendar_sync_token": "",
         "gmail_history_id": "",
+        "gmail_import_estimated_total": 0,
+        "gmail_import_page_token": "",
+        "gmail_import_processed_count": 0,
+        "gmail_import_started_at": "",
+        "gmail_import_status": "not_started",
         "required_scopes": scopes,
         "write_mode": "read_source_book_after_approval"
         if integration_id == "google_calendar"
@@ -2314,6 +2497,53 @@ def _mark_integration_failure(integration_id: str, message: str) -> None:
     put_clinic_integrations(updated)
 
 
+def _record_gmail_import_progress(
+    *,
+    integration: ClinicIntegrationsItem,
+    page: GmailMessagePage,
+    page_token: str,
+    synced_at: str,
+) -> dict[str, Any]:
+    continuing_import = bool(page_token) and str(integration.get("gmail_import_status", "")) == "importing"
+    previous_count = int(integration.get("gmail_import_processed_count", 0)) if continuing_import else 0
+    processed_count = previous_count + len(page["messages"])
+    estimated_total = max(
+        int(integration.get("gmail_import_estimated_total", 0)) if continuing_import else 0,
+        page["result_size_estimate"],
+        processed_count,
+    )
+    next_page_token = page["next_page_token"]
+    import_complete = not next_page_token
+    started_at = (
+        str(integration.get("gmail_import_started_at", ""))
+        if continuing_import
+        else synced_at
+    ) or synced_at
+    updated = cast(
+        ClinicIntegrationsItem,
+        {
+            **integration,
+            "status": "connected",
+            "last_sync_at": synced_at if import_complete else integration["last_sync_at"],
+            "last_error": "",
+            "gmail_import_status": "complete" if import_complete else "importing",
+            "gmail_import_page_token": next_page_token,
+            "gmail_import_processed_count": processed_count,
+            "gmail_import_estimated_total": estimated_total,
+            "gmail_import_started_at": started_at,
+            "updated_at": synced_at,
+        },
+    )
+    put_clinic_integrations(updated)
+    return {
+        "importStatus": updated["gmail_import_status"],
+        "importComplete": import_complete,
+        "messagesProcessed": processed_count,
+        "estimatedTotal": estimated_total,
+        "nextPageAvailable": bool(next_page_token),
+    }
+
+
 def _calendar_sync_window() -> tuple[str, str]:
     zone = _clinic_timezone()
     today = datetime.now(zone).date()
@@ -2427,148 +2657,8 @@ def _replace_google_schedule_cache(items: list[ClinicScheduleItem]) -> None:
         put_clinic_schedule(item)
 
 
-def _gmail_headers(message: dict[str, Any]) -> dict[str, str]:
-    payload = message.get("payload")
-    raw_headers = payload.get("headers") if isinstance(payload, dict) else None
-    headers: dict[str, str] = {}
-    if not isinstance(raw_headers, list):
-        return headers
-    for raw_header in raw_headers:
-        if not isinstance(raw_header, dict):
-            continue
-        name = raw_header.get("name")
-        value = raw_header.get("value")
-        if isinstance(name, str) and isinstance(value, str):
-            headers[name.lower()] = value
-    return headers
-
-
-def _decode_gmail_body_data(value: object) -> str:
-    if not isinstance(value, str) or not value:
-        return ""
-    try:
-        padded = value + ("=" * (-len(value) % 4))
-        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
-    except (ValueError, TypeError):
-        return ""
-
-
-def _html_to_text(value: str) -> str:
-    without_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
-    without_tags = re.sub(r"(?s)<[^>]+>", " ", without_scripts)
-    return html.unescape(without_tags)
-
-
-def _gmail_payload_text_parts(payload: object) -> tuple[list[str], list[str]]:
-    if not isinstance(payload, dict):
-        return [], []
-
-    plain_parts: list[str] = []
-    html_parts: list[str] = []
-    mime_type = str(payload.get("mimeType", "")).lower()
-    body = payload.get("body")
-    body_data = body.get("data") if isinstance(body, dict) else None
-    decoded = _decode_gmail_body_data(body_data)
-    if decoded:
-        if "html" in mime_type:
-            html_parts.append(_html_to_text(decoded))
-        else:
-            plain_parts.append(decoded)
-
-    raw_parts = payload.get("parts")
-    if isinstance(raw_parts, list):
-        for part in raw_parts:
-            nested_plain, nested_html = _gmail_payload_text_parts(part)
-            plain_parts.extend(nested_plain)
-            html_parts.extend(nested_html)
-
-    return plain_parts, html_parts
-
-
-def _gmail_message_text(message: dict[str, Any]) -> str:
-    plain_parts, html_parts = _gmail_payload_text_parts(message.get("payload"))
-    body_text = "\n".join(part for part in [*plain_parts, *html_parts] if part.strip())
-    if body_text.strip():
-        return _truncate(body_text, 4000)
-    return _truncate(html.unescape(str(message.get("snippet") or "")), 4000)
-
-
-def _gmail_visible_reply_text(value: str) -> str:
-    text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return ""
-    text = re.split(
-        r"(?im)\n\s*(?:on .+?wrote:|from:\s+.+|sent:\s+.+|to:\s+.+|subject:\s+.+|[-]+original message[-]+)",
-        text,
-        maxsplit=1,
-    )[0]
-    visible_lines: list[str] = []
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if re.match(r"(?i)^on .+ wrote:$", stripped):
-            break
-        if stripped.startswith(">"):
-            break
-        if visible_lines and re.match(r"(?i)^(from|sent|to|subject):\s+", stripped):
-            break
-        visible_lines.append(line)
-    return _truncate("\n".join(visible_lines).strip(), 4000)
-
-
-def _gmail_message_datetime(message: dict[str, Any], headers: dict[str, str]) -> datetime:
-    raw_internal_date = message.get("internalDate")
-    if isinstance(raw_internal_date, str) and raw_internal_date.isdigit():
-        return datetime.fromtimestamp(int(raw_internal_date) / 1000, tz=timezone.utc)
-    raw_date = headers.get("date", "")
-    if raw_date:
-        try:
-            parsed = parsedate_to_datetime(raw_date)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            pass
-    return datetime.now(timezone.utc)
-
-
-def _normalized_message_signature(sender_email: str, subject: str, message_text: str) -> str:
-    normalized_subject = re.sub(r"^(re|fw|fwd):\s*", "", subject.strip().lower())
-    normalized_text = re.sub(r"\s+", " ", message_text.strip().lower())
-    material = f"{sender_email.strip().lower()}\n{normalized_subject}\n{normalized_text[:2000]}"
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _gmail_message_context(message: dict[str, Any]) -> GmailMessageContext | None:
-    message_id = message.get("id")
-    if not isinstance(message_id, str) or not message_id:
-        return None
-
-    headers = _gmail_headers(message)
-    snippet = html.unescape(str(message.get("snippet") or ""))
-    message_text = _gmail_message_text(message) or snippet
-    sender_name, sender_email = parseaddr(headers.get("from", ""))
-    normalized_sender_email = sender_email.strip().lower()
-    subject = headers.get("subject", "").strip()
-    received_at = _gmail_message_datetime(message, headers)
-    localized = received_at.astimezone(_clinic_timezone())
-    thread_id = message.get("threadId")
-    summary = _truncate(subject or message_text or snippet or "New Gmail message", 120)
-    source_excerpt = _truncate(f"From: {headers.get('from', '')}\nSubject: {subject}\n\n{message_text}".strip(), 1200)
-    return {
-        "gmail_message_id": message_id,
-        "gmail_thread_id": thread_id if isinstance(thread_id, str) else "",
-        "message_id_header": headers.get("message-id", "").strip(),
-        "in_reply_to": headers.get("in-reply-to", "").strip(),
-        "references": headers.get("references", "").strip(),
-        "sender_name": sender_name,
-        "sender_email": normalized_sender_email,
-        "subject": subject,
-        "snippet": snippet,
-        "message_text": message_text,
-        "source_excerpt": source_excerpt,
-        "summary": summary,
-        "received_at": received_at,
-        "time_label": localized.strftime("%I:%M %p").lstrip("0"),
-        "message_signature": _normalized_message_signature(normalized_sender_email, subject, message_text),
-    }
+def _gmail_message_context(message: dict[str, Any]) -> NormalizedEmail | None:
+    return parse_gmail_message(message, clinic_timezone=_clinic_timezone())
 
 
 def _list_email_message_items() -> list[ClinicEmailMessagesItem]:
@@ -2615,7 +2705,7 @@ def _ensure_patient_for_request(item: ClinicPatientRequestsItem) -> None:
 
 
 def _message_record_item(
-    context: GmailMessageContext,
+    context: NormalizedEmail,
     *,
     patient_request_id: str,
     patient_id: str,
@@ -2658,7 +2748,7 @@ def _sent_message_record_item(
     body: str,
     processed_at: str,
 ) -> ClinicEmailMessagesItem:
-    context: GmailMessageContext = {
+    context: NormalizedEmail = {
         "gmail_message_id": gmail_message_id,
         "gmail_thread_id": gmail_thread_id,
         "message_id_header": "",
@@ -2684,6 +2774,30 @@ def _sent_message_record_item(
         direction="outbound",
         to_email=recipient,
     )
+
+
+def _persist_sent_conversation_message(
+    *,
+    request: ClinicPatientRequestsItem,
+    message: ClinicEmailMessagesItem,
+) -> None:
+    try:
+        _persist_conversation_message(
+            request=request,
+            message=message,
+            create_draft_revision=False,
+        )
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "event": "conversation_projection_failed",
+                    "practiceId": request["practice_id"],
+                    "gmailMessageId": message["gmail_message_id"],
+                    "error": _truncate(str(exc), 200),
+                }
+            )
+        )
 
 
 def _parse_sort_datetime(value: object) -> datetime:
@@ -2759,7 +2873,7 @@ def _message_indexes(
 
 
 def _awaiting_slot_request_for_sender_reply(
-    context: GmailMessageContext,
+    context: NormalizedEmail,
     patient_requests: list[ClinicPatientRequestsItem],
 ) -> ClinicPatientRequestsItem | None:
     sender_email = context["sender_email"].strip().lower()
@@ -3144,7 +3258,7 @@ def _llm_daily_briefing(
 
 def _llm_review_gmail_message(
     *,
-    context: GmailMessageContext,
+    context: NormalizedEmail,
     patient_name: str,
     patient_email: str,
     request_text: str,
@@ -4507,6 +4621,7 @@ def _gmail_message_to_patient_request_item(
     patient_by_email: dict[str, ClinicPatientsItem],
     synced_at: str,
     existing_request: ClinicPatientRequestsItem | None = None,
+    allow_llm_review: bool = True,
 ) -> ClinicPatientRequestsItem | None:
     context = _gmail_message_context(message)
     if context is None:
@@ -4521,7 +4636,8 @@ def _gmail_message_to_patient_request_item(
         snippet=relevance_text,
         patient_by_email=patient_by_email,
     )
-    if existing_request is None and not rule_clinic_relevant and not _clinic_llm_enabled():
+    llm_enabled_for_message = allow_llm_review and _clinic_llm_enabled()
+    if existing_request is None and not rule_clinic_relevant and not llm_enabled_for_message:
         return None
 
     normalized_sender_email = context["sender_email"]
@@ -4591,24 +4707,33 @@ def _gmail_message_to_patient_request_item(
             ),
             constraints,
         )
-        if _clinic_llm_enabled()
+        if llm_enabled_for_message
         and existing_request is None
         and not (booking_candidate is not None and booking_candidate["available"])
         and triage["risk_level"] != "high"
         else []
     )
-    llm_outcome = _llm_review_gmail_message(
-        context=context,
-        patient_name=patient_name,
-        patient_email=patient_email,
-        request_text=request_text,
-        fallback_triage=triage,
-        appointment_kind=appointment_kind,
-        duration_minutes=duration_minutes,
-        constraints=constraints,
-        calendar_availability_windows=candidate_slot_labels,
-        booking_candidate=booking_candidate,
-        existing_request=existing_request,
+    llm_outcome = (
+        _llm_review_gmail_message(
+            context=context,
+            patient_name=patient_name,
+            patient_email=patient_email,
+            request_text=request_text,
+            fallback_triage=triage,
+            appointment_kind=appointment_kind,
+            duration_minutes=duration_minutes,
+            constraints=constraints,
+            calendar_availability_windows=candidate_slot_labels,
+            booking_candidate=booking_candidate,
+            existing_request=existing_request,
+        )
+        if llm_enabled_for_message
+        else {
+            "review": None,
+            "status": "deferred_thread_history" if _clinic_llm_enabled() else "disabled",
+            "model": _clinic_llm_model(),
+            "error": "",
+        }
     )
     llm_review = llm_outcome["review"]
     if existing_request is None:
@@ -4866,8 +4991,24 @@ def _sync_google_calendar() -> dict[str, Any]:
 
 def _scan_gmail_inbox() -> dict[str, Any]:
     try:
-        _, client = _google_client_for_integration("gmail")
-        messages = client.list_gmail_message_metadata(query=GMAIL_SCAN_QUERY, max_results=GMAIL_SCAN_MAX_MESSAGES)
+        integration, client = _google_client_for_integration("gmail")
+        import_status = str(integration.get("gmail_import_status", "not_started"))
+        page_token = (
+            str(integration.get("gmail_import_page_token", ""))
+            if import_status == "importing"
+            else ""
+        )
+        page_size = (
+            GMAIL_IMPORT_PAGE_SIZE_WITH_LLM
+            if _clinic_llm_enabled()
+            else GMAIL_IMPORT_PAGE_SIZE_WITHOUT_LLM
+        )
+        page = client.list_gmail_thread_page(
+            query=GMAIL_SCAN_QUERY,
+            max_results=page_size,
+            page_token=page_token,
+        )
+        messages = page["messages"]
         patient_by_email = _patient_lookup_by_email()
         email_messages = _list_email_message_items()
         messages_by_id, messages_by_header_id, messages_by_signature = _message_indexes(email_messages)
@@ -4876,6 +5017,9 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         synced_at = _now()
         request_items_by_id: dict[str, ClinicPatientRequestsItem] = {}
         message_records: list[ClinicEmailMessagesItem] = []
+        conversation_candidates: list[
+            tuple[ClinicPatientRequestsItem, ClinicEmailMessagesItem, bool]
+        ] = []
 
         message_pairs = [
             (context, message)
@@ -4885,6 +5029,18 @@ def _scan_gmail_inbox() -> dict[str, Any]:
         ]
         message_contexts = [context for context, _ in message_pairs]
         messages_by_context_id = {context["gmail_message_id"]: message for context, message in message_pairs}
+        latest_context_by_thread: dict[str, NormalizedEmail] = {}
+        for context in message_contexts:
+            thread_key = context["gmail_thread_id"] or context["gmail_message_id"]
+            current_latest = latest_context_by_thread.get(thread_key)
+            if current_latest is None or (
+                context["received_at"],
+                context["gmail_message_id"],
+            ) > (
+                current_latest["received_at"],
+                current_latest["gmail_message_id"],
+            ):
+                latest_context_by_thread[thread_key] = context
 
         for context in sorted(message_contexts, key=lambda item: item["received_at"]):
             existing_message_record = messages_by_id.get(context["gmail_message_id"])
@@ -4892,6 +5048,15 @@ def _scan_gmail_inbox() -> dict[str, Any]:
                 existing_message_record,
                 requests_by_id,
             ):
+                existing_request = requests_by_id.get(existing_message_record["patient_request_id"])
+                if existing_request is not None and existing_message_record["classification"] != "duplicate":
+                    conversation_candidates.append(
+                        (
+                            existing_request,
+                            existing_message_record,
+                            existing_request["source_message_id"] == existing_message_record["gmail_message_id"],
+                        )
+                    )
                 continue
 
             duplicate_record = (
@@ -4948,6 +5113,12 @@ def _scan_gmail_inbox() -> dict[str, Any]:
                 patient_by_email=patient_by_email,
                 synced_at=synced_at,
                 existing_request=existing_request,
+                allow_llm_review=(
+                    latest_context_by_thread.get(
+                        context["gmail_thread_id"] or context["gmail_message_id"]
+                    )
+                    is context
+                ),
             )
             if item is None:
                 continue
@@ -4966,6 +5137,7 @@ def _scan_gmail_inbox() -> dict[str, Any]:
                 processed_at=synced_at,
             )
             message_records.append(message_record)
+            conversation_candidates.append((item, message_record, True))
             messages_by_id[message_record["gmail_message_id"]] = message_record
             if message_record["message_id_header"]:
                 messages_by_header_id[message_record["message_id_header"]] = message_record
@@ -4974,12 +5146,23 @@ def _scan_gmail_inbox() -> dict[str, Any]:
 
         sorted_requests = sorted(request_items_by_id.values(), key=lambda item: item["created_at"], reverse=True)
         sorted_actions = _upsert_gmail_request_candidates(sorted_requests)
+        for request_item, message_record, create_draft_revision in conversation_candidates:
+            _persist_conversation_message(
+                request=request_item,
+                message=message_record,
+                create_draft_revision=create_draft_revision,
+            )
         for message_record in message_records:
             if get_clinic_email_messages(_practice_id(), message_record["gmail_message_id"]) is None:
                 put_clinic_email_messages(message_record)
-        _mark_integration_success("gmail", synced_at)
+        import_progress = _record_gmail_import_progress(
+            integration=integration,
+            page=page,
+            page_token=page_token,
+            synced_at=synced_at,
+        )
         return {
-            "status": "synced",
+            "status": "synced" if import_progress["importComplete"] else "importing",
             "sourceOfTruth": "gmail",
             "writeMode": "read_inbox_prepare_in_app_drafts",
             "externalWrites": 0,
@@ -4989,6 +5172,7 @@ def _scan_gmail_inbox() -> dict[str, Any]:
             "message": "Gmail read completed. Patient requests and in-app drafts were prepared; no email was sent or drafted in Gmail.",
             "actions": [_action_dto(item) for item in sorted_actions],
             "patientRequests": [_patient_request_dto(item) for item in sorted_requests],
+            **import_progress,
         }
     except (GoogleWorkspaceError, RuntimeError) as exc:
         _mark_integration_failure("gmail", str(exc))
@@ -5004,6 +5188,14 @@ def _handle_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return json_response(200, _daily_briefing())
     if action == "list_patient_requests":
         return json_response(200, _list_patient_requests(bool(payload.get("includeCompleted", False))))
+    if action == "list_conversations":
+        return json_response(200, _list_conversations())
+    if action == "get_conversation":
+        conversation_id = str(payload.get("conversationId", "")).strip()
+        if not conversation_id:
+            return json_response(400, {"error": "conversationId is required"})
+        response = _get_conversation(conversation_id)
+        return json_response(404 if "error" in response else 200, response)
     if action == "approve_action":
         action_id = str(payload.get("actionId", "")).strip()
         if not action_id:

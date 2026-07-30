@@ -1,0 +1,28 @@
+{
+  "primary_key": {
+    "partition_key": {
+      "name": "practice_conversation_id",
+      "type": "String"
+    },
+    "sort_key": {
+      "name": "draft_revision_id",
+      "type": "String"
+    }
+  },
+  "attributes": {
+    "availability_windows": "List",
+    "classification": "String",
+    "conversation_id": "String",
+    "created_at": "String",
+    "draft_body": "String",
+    "draft_revision_id": "String",
+    "llm_model": "String",
+    "llm_status": "String",
+    "practice_conversation_id": "String",
+    "practice_id": "String",
+    "referenced_slot_ids": "List",
+    "request_constraints": "Map",
+    "source_message_id": "String",
+    "status": "String"
+  }
+}

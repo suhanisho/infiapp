@@ -29,6 +29,11 @@ external writes are deliberately approval-gated.
   patient requests. It is keyed by `practice_id + patient_request_id`.
 - `clinic_email_messages` stores processed inbound/outbound Gmail messages for
   idempotency, duplicate detection, and thread continuity.
+- `clinic_conversations` stores the latest Inbox projection for each Gmail
+  thread. Newer-only conditional writes keep retries and out-of-order pages from
+  replacing a newer summary.
+- `clinic_draft_revisions` preserves a create-only draft snapshot for each
+  relevant inbound message.
 - `clinic_actions` stores child approval/audit records linked by
   `patient_request_id`; action IDs are separate so one request can support
   multiple future actions.
@@ -44,16 +49,23 @@ external writes are deliberately approval-gated.
   Secrets Manager and records connection metadata in `clinic_integrations`.
 - `sync_google_calendar` refreshes the OAuth token, reads Google Calendar
   events for the next sync window, and refreshes the local schedule cache.
-- `scan_gmail_inbox` refreshes the OAuth token, reads recent Gmail messages,
-  checks the Gmail message ledger, resolves Gmail threads into existing patient
-  requests where possible, and upserts patient requests plus in-app action
-  drafts. If `OPENAI_API_KEY` is configured, relevance, classification, and
-  draft wording are LLM-assisted with deterministic fallback. It does not delete
-  durable open requests that are absent from a later scan. For scheduling
-  requests such as meet-and-greet or initial consultation messages, draft
-  replies include availability windows from the local Google Calendar cache,
-  filtered by patient preferences in the email such as weekdays, next week,
-  morning/afternoon, or after/before time constraints.
+- `scan_gmail_inbox` refreshes the OAuth token and reads the most recent 30 days
+  through bounded, resumable Gmail-thread pages. Messages inside a fetched
+  thread are processed oldest-to-newest; historical messages use deterministic
+  classification and the LLM is reserved for the latest unprocessed message.
+  The Gmail integration row stores the
+  continuation token, processed count, estimated total, and import state, so the
+  WebUI can continue after a refresh or failed request without a background
+  queue. The scan checks the Gmail message ledger, resolves Gmail threads into
+  existing patient requests where possible, and upserts patient requests plus
+  in-app action drafts and conversation projections. If `OPENAI_API_KEY` is
+  configured, relevance, classification, and draft wording are LLM-assisted
+  with deterministic fallback. It does not delete durable open requests that
+  are absent from a later scan. For scheduling requests such as meet-and-greet
+  or initial consultation messages, draft replies include availability windows
+  from the local Google Calendar cache, filtered by patient preferences in the
+  email such as weekdays, next week, morning/afternoon, or after/before time
+  constraints.
 - If the patient replies in the same Gmail thread with an exact preferred slot,
   the app keeps the same `patient_request_id` and creates a `confirm_booking`
   action instead of another first-contact availability draft.

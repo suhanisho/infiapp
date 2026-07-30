@@ -1,1 +1,1 @@
-"""Dr. Shalini's Clinic Lambda agents."""
+"""Nora clinic assistant Lambda agents."""

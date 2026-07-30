@@ -1,5 +1,5 @@
 {
-  "description": "External Lambda agent for Dr. Shalini's Clinic action queue, patients, schedule, and settings.",
+  "description": "External Lambda agent for Nora, Dr. Shalini's clinic assistant for actions, patients, schedules, and settings.",
   "connectivity": "external",
   "memory_mb": 128,
   "timeout_seconds": 30,
@@ -142,6 +142,10 @@
             "accountEmail": "String | Null",
             "calendarId": "String | Null",
             "connectedAt": "String | Null",
+            "gmailImportEstimatedTotal": "Number",
+            "gmailImportProcessedCount": "Number",
+            "gmailImportStartedAt": "String | Null",
+            "gmailImportStatus": "String",
             "integrationId": "String",
             "lastError": "String | Null",
             "lastSyncAt": "String | Null",
@@ -264,6 +268,107 @@
       }
     },
     {
+      "call": "get_conversation",
+      "description": "Returns one Gmail conversation with its immutable message history, AI draft revisions, and related review action.",
+      "input": {
+        "actorEmail?": "String",
+        "conversationId": "String"
+      },
+      "output": {
+        "conversation": {
+          "conversationId": "String",
+          "createdAt": "String",
+          "latestClassification": "String",
+          "latestDraftRevisionId": "String | Null",
+          "latestMessageAt": "String",
+          "latestMessageDirection": "String",
+          "latestMessageExcerpt": "String",
+          "latestMessageId": "String",
+          "patientEmail": "String | Null",
+          "patientId": "String | Null",
+          "patientName": "String | Null",
+          "patientRequestId": "String | Null",
+          "practiceId": "String",
+          "requiresDoctorReview": "Boolean",
+          "sourceProvider": "String",
+          "sourceThreadId": "String | Null",
+          "status": "String",
+          "subject": "String",
+          "updatedAt": "String"
+        },
+        "draftRevisions": [
+          {
+            "availabilityWindows": "List",
+            "classification": "String",
+            "conversationId": "String",
+            "createdAt": "String",
+            "draftBody": "String",
+            "draftRevisionId": "String",
+            "llmModel": "String",
+            "llmStatus": "String",
+            "referencedSlotIds": "List",
+            "requestConstraints": "Map",
+            "sourceMessageId": "String",
+            "status": "String"
+          }
+        ],
+        "messages": [
+          {
+            "bodyExcerpt": "String",
+            "classification": "String",
+            "direction": "String",
+            "fromEmail": "String | Null",
+            "fromName": "String | Null",
+            "messageId": "String",
+            "processedAt": "String",
+            "receivedAt": "String",
+            "subject": "String",
+            "threadId": "String | Null",
+            "toEmail": "String | Null"
+          }
+        ],
+        "practiceId": "String",
+        "relatedActionId": "String | Null"
+      }
+    },
+    {
+      "call": "list_conversations",
+      "description": "Lists one Inbox row per Gmail conversation, ordered by the latest message, with resumable import progress.",
+      "input": {
+        "actorEmail?": "String"
+      },
+      "output": {
+        "conversations": [
+          {
+            "conversationId": "String",
+            "createdAt": "String",
+            "latestClassification": "String",
+            "latestDraftRevisionId": "String | Null",
+            "latestMessageAt": "String",
+            "latestMessageDirection": "String",
+            "latestMessageExcerpt": "String",
+            "latestMessageId": "String",
+            "patientEmail": "String | Null",
+            "patientId": "String | Null",
+            "patientName": "String | Null",
+            "patientRequestId": "String | Null",
+            "practiceId": "String",
+            "requiresDoctorReview": "Boolean",
+            "sourceProvider": "String",
+            "sourceThreadId": "String | Null",
+            "status": "String",
+            "subject": "String",
+            "updatedAt": "String"
+          }
+        ],
+        "estimatedTotal": "Number",
+        "importStatus": "String",
+        "lastSyncAt": "String | Null",
+        "messagesProcessed": "Number",
+        "practiceId": "String"
+      }
+    },
+    {
       "call": "list_patients",
       "description": "Lists patient directory records used by the doctor-facing app.",
       "input": {
@@ -318,6 +423,10 @@
             "accountEmail": "String | Null",
             "calendarId": "String | Null",
             "connectedAt": "String | Null",
+            "gmailImportEstimatedTotal": "Number",
+            "gmailImportProcessedCount": "Number",
+            "gmailImportStartedAt": "String | Null",
+            "gmailImportStatus": "String",
             "integrationId": "String",
             "lastError": "String | Null",
             "lastSyncAt": "String | Null",
@@ -434,8 +543,13 @@
           }
         ],
         "externalWrites": "Number",
+        "estimatedTotal": "Number",
+        "importComplete": "Boolean",
+        "importStatus": "String",
         "message": "String",
+        "messagesProcessed": "Number",
         "messagesScanned": "Number",
+        "nextPageAvailable": "Boolean",
         "patientRequests": [
           {
             "appointmentType": "String",

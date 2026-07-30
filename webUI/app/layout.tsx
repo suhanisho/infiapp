@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Dr. Shalini's Clinic",
-  description: "Clinic assistant for actions, schedule, patients, and approval records.",
+  title: "Nora",
+  description: "Nora, Dr. Shalini's clinic assistant for actions, schedules, patients, and approval records.",
 };
 
 export default function RootLayout({

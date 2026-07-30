@@ -24,6 +24,7 @@ GOOGLE_EMAIL_SCOPE = "email"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+GMAIL_THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
 
 JsonObject = dict[str, Any]
 QueryParams = Mapping[str, object] | Sequence[tuple[str, object]]
@@ -51,6 +52,14 @@ class GmailScanPreview(TypedDict):
     proposed_actions: int
     status: str
     message: str
+
+
+class GmailMessagePage(TypedDict):
+    """One bounded page of full Gmail messages plus continuation metadata."""
+
+    messages: list[JsonObject]
+    next_page_token: str
+    result_size_estimate: int
 
 
 class GoogleWorkspaceClient(Protocol):
@@ -197,13 +206,25 @@ class GoogleWorkspaceHttpClient:
         return self._post_json(url, event, {"sendUpdates": send_updates})
 
     def list_gmail_message_metadata(self, *, query: str, max_results: int = 10) -> list[JsonObject]:
+        return self.list_gmail_message_page(query=query, max_results=max_results)["messages"]
+
+    def list_gmail_message_page(
+        self,
+        *,
+        query: str,
+        max_results: int = 10,
+        page_token: str = "",
+    ) -> GmailMessagePage:
+        params: dict[str, object] = {
+            "q": query,
+            "maxResults": max_results,
+            "includeSpamTrash": "false",
+        }
+        if page_token:
+            params["pageToken"] = page_token
         listing = self._get(
             GMAIL_MESSAGES_URL,
-            {
-                "q": query,
-                "maxResults": max_results,
-                "includeSpamTrash": "false",
-            },
+            params,
         )
         message_refs = listing.get("messages", [])
         messages: list[JsonObject] = []
@@ -215,7 +236,79 @@ class GoogleWorkspaceHttpClient:
             if not isinstance(message_id, str) or not message_id:
                 continue
             messages.append(self.get_gmail_message_full(message_id))
-        return messages
+        next_page_token = listing.get("nextPageToken")
+        result_size_estimate = listing.get("resultSizeEstimate")
+        return {
+            "messages": messages,
+            "next_page_token": next_page_token if isinstance(next_page_token, str) else "",
+            "result_size_estimate": int(result_size_estimate)
+            if isinstance(result_size_estimate, (int, float))
+            else len(messages),
+        }
+
+    def list_gmail_thread_page(
+        self,
+        *,
+        query: str,
+        max_results: int = 10,
+        page_token: str = "",
+    ) -> GmailMessagePage:
+        """Return full inbox messages grouped by Gmail thread.
+
+        Gmail lists individual messages newest-first. Fetching complete threads
+        lets the caller process a patient's initial request before later replies,
+        even during a first-run historical import.
+        """
+
+        params: dict[str, object] = {
+            "q": query,
+            "maxResults": max_results,
+            "includeSpamTrash": "false",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        listing = self._get(GMAIL_THREADS_URL, params)
+        thread_refs = listing.get("threads", [])
+        messages: list[JsonObject] = []
+        loaded_thread_count = 0
+        iterable_thread_refs = thread_refs if isinstance(thread_refs, list) else []
+        for thread_ref in iterable_thread_refs:
+            if not isinstance(thread_ref, dict):
+                continue
+            thread_id = thread_ref.get("id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            thread = self.get_gmail_thread_full(thread_id)
+            loaded_thread_count += 1
+            raw_messages = thread.get("messages", [])
+            if not isinstance(raw_messages, list):
+                continue
+            for message in raw_messages:
+                if not isinstance(message, dict):
+                    continue
+                label_ids = message.get("labelIds")
+                if isinstance(label_ids, list) and "INBOX" not in label_ids:
+                    continue
+                messages.append(message)
+        next_page_token = listing.get("nextPageToken")
+        raw_thread_estimate = listing.get("resultSizeEstimate")
+        estimated_thread_total = (
+            int(raw_thread_estimate)
+            if isinstance(raw_thread_estimate, (int, float))
+            else loaded_thread_count
+        )
+        average_messages_per_thread = (
+            max(1.0, len(messages) / loaded_thread_count)
+            if loaded_thread_count
+            else 1.0
+        )
+        return {
+            "messages": messages,
+            "next_page_token": next_page_token if isinstance(next_page_token, str) else "",
+            "result_size_estimate": round(
+                estimated_thread_total * average_messages_per_thread
+            ),
+        }
 
     def get_gmail_message_metadata(self, message_id: str) -> JsonObject:
         url = f"{GMAIL_MESSAGES_URL}/{urllib.parse.quote(message_id, safe='')}"
@@ -235,6 +328,10 @@ class GoogleWorkspaceHttpClient:
 
     def get_gmail_message_full(self, message_id: str) -> JsonObject:
         url = f"{GMAIL_MESSAGES_URL}/{urllib.parse.quote(message_id, safe='')}"
+        return self._get(url, {"format": "full"})
+
+    def get_gmail_thread_full(self, thread_id: str) -> JsonObject:
+        url = f"{GMAIL_THREADS_URL}/{urllib.parse.quote(thread_id, safe='')}"
         return self._get(url, {"format": "full"})
 
     def send_gmail_message(self, *, raw_message: str, thread_id: str | None = None) -> JsonObject:

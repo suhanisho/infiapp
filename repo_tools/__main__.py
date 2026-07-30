@@ -1,4 +1,4 @@
-"""Command runner for Dr. Shalini's Clinic repository tooling."""
+"""Command runner for Nora repository tooling."""
 
 from __future__ import annotations
 
@@ -140,7 +140,11 @@ def typecheck_agents() -> None:
                 code_env.get("MYPYPATH", ""),
             ]
         )
-        run(python_command(*mypy_base_args, "."), cwd=agent_dir / "code", env=code_env)
+        run(
+            python_command(*mypy_base_args, "--explicit-package-bases", "."),
+            cwd=agent_dir / "code",
+            env=code_env,
+        )
         test_dir = agent_dir / "test"
         if test_dir.exists():
             print(f"==> Type checking agent tests: {agent_dir.name}", flush=True)
@@ -178,7 +182,7 @@ COMMANDS = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Dr. Shalini's Clinic repository tooling")
+    parser = argparse.ArgumentParser(description="Run Nora repository tooling")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command in sorted(COMMANDS):

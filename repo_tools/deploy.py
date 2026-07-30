@@ -667,7 +667,7 @@ def ensure_vercel_agent_role(account_id: str, region: str, team_slug: str) -> st
                 "--assume-role-policy-document",
                 json.dumps(trust_policy),
                 "--description",
-                f"OIDC role for Vercel project {VERCEL_PROJECT_NAME} to invoke external Dr. Shalini's Clinic agents.",
+                f"OIDC role for Vercel project {VERCEL_PROJECT_NAME} to invoke external Nora agents.",
             ]
         )
         role_code, role_data = aws_json(["aws", "iam", "get-role", "--role-name", VERCEL_AGENT_ROLE_NAME])

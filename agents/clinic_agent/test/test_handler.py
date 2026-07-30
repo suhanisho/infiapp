@@ -37,6 +37,10 @@ lambda_handler = cast(
     Callable[..., dict[str, Any]],
     getattr(handler_module, "lambda_handler"),
 )
+record_gmail_import_progress = cast(
+    Callable[..., dict[str, Any]],
+    getattr(handler_module, "_record_gmail_import_progress"),
+)
 
 
 class FakeGoogleClient:
@@ -98,6 +102,34 @@ class FakeGoogleClient:
             }
         ]
 
+    def list_gmail_message_page(
+        self,
+        *,
+        query: str,
+        max_results: int = 10,
+        page_token: str = "",
+    ) -> dict[str, Any]:
+        _ = page_token
+        messages = self.list_gmail_message_metadata(query=query, max_results=max_results)
+        return {
+            "messages": messages,
+            "next_page_token": "",
+            "result_size_estimate": len(messages),
+        }
+
+    def list_gmail_thread_page(
+        self,
+        *,
+        query: str,
+        max_results: int = 10,
+        page_token: str = "",
+    ) -> dict[str, Any]:
+        return self.list_gmail_message_page(
+            query=query,
+            max_results=max_results,
+            page_token=page_token,
+        )
+
     def get_gmail_message_metadata(self, message_id: str) -> dict[str, Any]:
         return {
             "id": message_id,
@@ -142,8 +174,24 @@ class ClinicAgentTest(unittest.TestCase):
     def setUp(self) -> None:
         self._llm_env_patch = patch.dict(handler_module.os.environ, {"CLINIC_LLM_ENABLED": "false"})
         self._llm_env_patch.start()
+        self._conversation_persistence_patch = patch.object(handler_module, "_persist_conversation_message")
+        self.conversation_persistence = self._conversation_persistence_patch.start()
+        self._gmail_import_progress_patch = patch.object(
+            handler_module,
+            "_record_gmail_import_progress",
+            return_value={
+                "importStatus": "complete",
+                "importComplete": True,
+                "messagesProcessed": 1,
+                "estimatedTotal": 1,
+                "nextPageAvailable": False,
+            },
+        )
+        self.gmail_import_progress = self._gmail_import_progress_patch.start()
 
     def tearDown(self) -> None:
+        self._gmail_import_progress_patch.stop()
+        self._conversation_persistence_patch.stop()
         self._llm_env_patch.stop()
 
     def test_lists_seed_actions_when_table_is_empty(self) -> None:
@@ -564,6 +612,131 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["days"][2]["events"][0]["patientName"], "Future Patient")
         self.assertEqual(body["days"][2]["events"][0]["gestationAge"], "24+3")
 
+    def test_conversation_api_lists_latest_first_and_returns_history(self) -> None:
+        conversation = cast(
+            Any,
+            {
+                "practice_id": handler_module.LEGACY_CLINIC_ID,
+                "conversation_id": "gmail-thread-thread-1",
+                "source_provider": "gmail",
+                "source_thread_id": "thread-1",
+                "patient_id": "patient-1",
+                "patient_name": "Rachel Davies",
+                "patient_email": "rachel@example.com",
+                "patient_request_id": "request-1",
+                "subject": "Appointment request",
+                "latest_message_id": "message-2",
+                "latest_message_excerpt": "Tuesday afternoon works.",
+                "latest_message_at": "2026-08-01T10:00:00+00:00",
+                "latest_message_sort_key": "2026-08-01T10:00:00+00:00#message-2",
+                "latest_message_direction": "inbound",
+                "latest_classification": "appointment_booking_selection",
+                "latest_draft_revision_id": "2026-08-01T10:00:00+00:00#message-2#v1",
+                "status": "needs_approval",
+                "requires_doctor_review": False,
+                "created_at": "2026-08-01T09:00:00+00:00",
+                "updated_at": "2026-08-01T10:00:01+00:00",
+            },
+        )
+        older_conversation = cast(
+            Any,
+            {
+                **conversation,
+                "conversation_id": "gmail-thread-thread-older",
+                "source_thread_id": "thread-older",
+                "latest_message_id": "message-older",
+                "latest_message_sort_key": "2026-07-31T10:00:00+00:00#message-older",
+            },
+        )
+        message = cast(
+            Any,
+            {
+                "practice_id": handler_module.LEGACY_CLINIC_ID,
+                "gmail_message_id": "message-2",
+                "gmail_thread_id": "thread-1",
+                "message_id_header": "<message-2@example.com>",
+                "in_reply_to": "<message-1@example.com>",
+                "references": "<message-1@example.com>",
+                "message_signature": "signature-2",
+                "patient_request_id": "request-1",
+                "patient_id": "patient-1",
+                "direction": "inbound",
+                "from_email": "rachel@example.com",
+                "from_name": "Rachel Davies",
+                "to_email": "",
+                "subject": "Re: Appointment request",
+                "body_excerpt": "Tuesday afternoon works.",
+                "classification": "appointment_booking_selection",
+                "source_provider": "gmail",
+                "received_at": "2026-08-01T10:00:00+00:00",
+                "processed_at": "2026-08-01T10:00:01+00:00",
+            },
+        )
+        revision = cast(
+            Any,
+            {
+                "practice_conversation_id": (
+                    f"{handler_module.LEGACY_CLINIC_ID}#gmail-thread-thread-1"
+                ),
+                "draft_revision_id": "2026-08-01T10:00:00+00:00#message-2#v1",
+                "practice_id": handler_module.LEGACY_CLINIC_ID,
+                "conversation_id": "gmail-thread-thread-1",
+                "source_message_id": "message-2",
+                "classification": "appointment_booking_selection",
+                "request_constraints": {},
+                "availability_windows": ["Tuesday 4 August, between 1:00 PM and 4:00 PM"],
+                "referenced_slot_ids": [],
+                "draft_body": "Dear Rachel, Tuesday afternoon is available.",
+                "llm_status": "used",
+                "llm_model": "test-model",
+                "status": "proposed",
+                "created_at": "2026-08-01T10:00:00+00:00",
+            },
+        )
+        related_action = cast(
+            Any,
+            {
+                **handler_module.SEED_ACTIONS[0],
+                "patient_request_id": "request-1",
+                "updated_at": "2026-08-01T10:00:02+00:00",
+            },
+        )
+
+        with (
+            patch.object(
+                handler_module,
+                "query_clinic_conversations_by_conversation_id_range_page",
+                return_value={"items": [older_conversation, conversation], "next_key": None},
+            ),
+            patch.object(handler_module, "get_clinic_integrations", return_value=None),
+        ):
+            listed = handler_module._list_conversations()
+
+        self.assertEqual(
+            [item["conversationId"] for item in listed["conversations"]],
+            ["gmail-thread-thread-1", "gmail-thread-thread-older"],
+        )
+
+        with (
+            patch.object(handler_module, "get_clinic_conversations", return_value=conversation),
+            patch.object(
+                handler_module,
+                "query_clinic_email_messages_by_gmail_message_id_range_page",
+                return_value={"items": [message], "next_key": None},
+            ),
+            patch.object(
+                handler_module,
+                "query_clinic_draft_revisions_by_draft_revision_id_range_page",
+                return_value={"items": [revision], "next_key": None},
+            ),
+            patch.object(handler_module, "_list_action_items", return_value=[related_action]),
+        ):
+            detail = handler_module._get_conversation("gmail-thread-thread-1")
+
+        self.assertEqual(detail["messages"][0]["messageId"], "message-2")
+        self.assertEqual(detail["draftRevisions"][0]["draftBody"], revision["draft_body"])
+        self.assertEqual(detail["relatedActionId"], related_action["action_id"])
+
     def test_daily_briefing_falls_back_when_llm_disabled(self) -> None:
         today = datetime.now(handler_module._clinic_timezone()).date()
         action_item = {
@@ -663,7 +836,6 @@ class ClinicAgentTest(unittest.TestCase):
             patch.object(handler_module, "get_clinic_email_messages", return_value=None),
             patch.object(handler_module, "put_clinic_email_messages"),
             patch.object(handler_module, "_upsert_gmail_request_candidates", side_effect=lambda items: [handler_module._patient_request_to_action_item(item) for item in items]) as upsert_requests,
-            patch.object(handler_module, "_mark_integration_success") as mark_success,
         ):
             response = lambda_handler({"action": "scan_gmail_inbox"})
 
@@ -684,7 +856,153 @@ class ClinicAgentTest(unittest.TestCase):
         self.assertEqual(body["patientRequests"][0]["requestType"], "appointment_request")
         self.assertFalse(body["patientRequests"][0]["requiresDoctorReview"])
         upsert_requests.assert_called_once()
-        mark_success.assert_called_once()
+        self.conversation_persistence.assert_called_once()
+        persisted_request = self.conversation_persistence.call_args.kwargs["request"]
+        persisted_message = self.conversation_persistence.call_args.kwargs["message"]
+        self.assertEqual(persisted_request["patient_request_id"], "gmail-thread-gmail-thread-live-1")
+        self.assertEqual(persisted_message["gmail_message_id"], "gmail-message-live-1")
+        self.assertEqual(persisted_message["gmail_thread_id"], "gmail-thread-live-1")
+        self.gmail_import_progress.assert_called_once()
+
+    def test_gmail_thread_import_processes_oldest_first_and_reviews_latest_with_llm(self) -> None:
+        class FollowUpThreadGoogleClient(FakeGoogleClient):
+            def list_gmail_thread_page(
+                self,
+                *,
+                query: str,
+                max_results: int = 10,
+                page_token: str = "",
+            ) -> dict[str, Any]:
+                _ = (query, max_results, page_token)
+                return {
+                    "messages": [
+                        {
+                            "id": "message-latest",
+                            "threadId": "thread-1",
+                            "internalDate": "1785582000000",
+                            "snippet": "Tuesday at 2:30 PM works.",
+                            "payload": {"headers": [{"name": "From", "value": "Rachel <rachel@example.com>"}]},
+                        },
+                        {
+                            "id": "message-initial",
+                            "threadId": "thread-1",
+                            "internalDate": "1785578400000",
+                            "snippet": "Could I book an appointment next week?",
+                            "payload": {"headers": [{"name": "From", "value": "Rachel <rachel@example.com>"}]},
+                        },
+                    ],
+                    "next_page_token": "",
+                    "result_size_estimate": 1,
+                }
+
+        observed_calls: list[tuple[str, bool]] = []
+
+        def observe_message(message: dict[str, Any], **kwargs: Any) -> None:
+            observed_calls.append((str(message["id"]), bool(kwargs["allow_llm_review"])))
+            return None
+
+        with (
+            patch.object(
+                handler_module,
+                "_google_client_for_integration",
+                return_value=(
+                    {**handler_module.SEED_INTEGRATIONS[1], "token_secret_id": "secret"},
+                    FollowUpThreadGoogleClient(),
+                ),
+            ),
+            patch.object(handler_module, "_patient_lookup_by_email", return_value={}),
+            patch.object(handler_module, "query_clinic_email_messages", return_value=[]),
+            patch.object(handler_module, "query_clinic_patient_requests", return_value=[]),
+            patch.object(
+                handler_module,
+                "_gmail_message_to_patient_request_item",
+                side_effect=observe_message,
+            ),
+            patch.object(handler_module, "_upsert_gmail_request_candidates", return_value=[]),
+        ):
+            response = lambda_handler({"action": "scan_gmail_inbox"})
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(
+            observed_calls,
+            [
+                ("message-initial", False),
+                ("message-latest", True),
+            ],
+        )
+
+    def test_gmail_import_progress_resumes_and_completes(self) -> None:
+        integration = cast(Any, {**handler_module.SEED_INTEGRATIONS[1], "status": "connected"})
+        stored_integrations: list[dict[str, Any]] = []
+        with patch.object(handler_module, "put_clinic_integrations", side_effect=stored_integrations.append):
+            first = record_gmail_import_progress(
+                integration=integration,
+                page={
+                    "messages": [{"id": "message-1"}, {"id": "message-2"}],
+                    "next_page_token": "page-2",
+                    "result_size_estimate": 3,
+                },
+                page_token="",
+                synced_at="2026-08-01T09:00:00+00:00",
+            )
+            resumed_integration = cast(Any, stored_integrations[-1])
+            second = record_gmail_import_progress(
+                integration=resumed_integration,
+                page={
+                    "messages": [{"id": "message-3"}],
+                    "next_page_token": "",
+                    "result_size_estimate": 3,
+                },
+                page_token="page-2",
+                synced_at="2026-08-01T09:05:00+00:00",
+            )
+
+        self.assertEqual(first["importStatus"], "importing")
+        self.assertFalse(first["importComplete"])
+        self.assertEqual(first["messagesProcessed"], 2)
+        self.assertEqual(stored_integrations[0]["gmail_import_page_token"], "page-2")
+        self.assertEqual(second["importStatus"], "complete")
+        self.assertTrue(second["importComplete"])
+        self.assertEqual(second["messagesProcessed"], 3)
+        self.assertEqual(stored_integrations[-1]["last_sync_at"], "2026-08-01T09:05:00+00:00")
+
+    def test_existing_gmail_message_backfills_conversation_projection(self) -> None:
+        source_message = FakeGoogleClient().list_gmail_message_metadata(query="", max_results=1)[0]
+        with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):
+            request_item = handler_module._gmail_message_to_patient_request_item(
+                source_message,
+                patient_by_email={},
+                synced_at="2026-08-01T09:00:00+00:00",
+            )
+        self.assertIsNotNone(request_item)
+        request_item = cast(Any, request_item)
+        context = handler_module._gmail_message_context(source_message)
+        self.assertIsNotNone(context)
+        message_record = handler_module._message_record_item(
+            cast(Any, context),
+            patient_request_id=request_item["patient_request_id"],
+            patient_id=request_item["patient_id"],
+            classification=request_item["request_type"],
+            processed_at="2026-08-01T09:00:00+00:00",
+        )
+
+        self.conversation_persistence.reset_mock()
+        with (
+            patch.object(
+                handler_module,
+                "_google_client_for_integration",
+                return_value=({**handler_module.SEED_INTEGRATIONS[1], "token_secret_id": "secret"}, FakeGoogleClient()),
+            ),
+            patch.object(handler_module, "_patient_lookup_by_email", return_value={}),
+            patch.object(handler_module, "query_clinic_email_messages", return_value=[message_record]),
+            patch.object(handler_module, "query_clinic_patient_requests", return_value=[request_item]),
+            patch.object(handler_module, "_upsert_gmail_request_candidates", return_value=[]),
+        ):
+            response = lambda_handler({"action": "scan_gmail_inbox"})
+
+        self.assertEqual(response["statusCode"], 200)
+        self.conversation_persistence.assert_called_once()
+        self.assertTrue(self.conversation_persistence.call_args.kwargs["create_draft_revision"])
 
     def test_request_action_id_is_distinct_from_patient_request_id(self) -> None:
         with patch.object(handler_module, "_suggest_free_slot_labels", return_value=[]):

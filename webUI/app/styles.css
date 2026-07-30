@@ -1233,7 +1233,7 @@ h1 {
 
 .bottom-nav {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--line);
   background: var(--bg);
   padding: 16px 12px max(16px, env(safe-area-inset-bottom));
@@ -1442,6 +1442,281 @@ h1 {
   font-weight: 500;
   padding: 18px;
   text-align: center;
+}
+
+.inbox-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.inbox-import-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.inbox-import-card > div {
+  display: grid;
+  gap: 4px;
+}
+
+.inbox-import-card strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.inbox-import-card small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.inbox-import-card progress {
+  width: 100%;
+  height: 6px;
+  grid-column: 1 / -1;
+  accent-color: var(--green);
+}
+
+.inbox-search {
+  margin: 0;
+}
+
+.inbox-list {
+  gap: 8px;
+}
+
+.conversation-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: inherit;
+  padding: 13px;
+  text-align: left;
+}
+
+.conversation-avatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.conversation-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.conversation-row-copy > span {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conversation-row-copy strong,
+.conversation-row-copy b,
+.conversation-row-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-row-copy strong {
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.conversation-row-copy time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.conversation-row-copy b {
+  font-size: 0.78rem;
+  font-weight: 550;
+}
+
+.conversation-row-copy small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.conversation-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.inbox-back-button {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  padding: 0;
+}
+
+.conversation-heading {
+  margin-bottom: 0;
+}
+
+.conversation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.conversation-history {
+  display: grid;
+  gap: 10px;
+}
+
+.conversation-message {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 13px;
+}
+
+.conversation-message.is-outbound {
+  margin-left: 18px;
+  background: var(--green-soft);
+}
+
+.conversation-message.is-inbound {
+  margin-right: 18px;
+}
+
+.conversation-message header,
+.inbox-draft-card > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conversation-message strong {
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.conversation-message time,
+.inbox-draft-card time,
+.draft-history time {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.conversation-message p,
+.inbox-draft-card p,
+.draft-history p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.conversation-message p {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.inbox-draft-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--green);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.inbox-draft-card > header div,
+.draft-availability {
+  display: grid;
+  gap: 3px;
+}
+
+.inbox-draft-card > header span,
+.draft-availability > span {
+  color: var(--green);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inbox-draft-card > header strong {
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.inbox-draft-card p {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.draft-availability {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+
+.draft-availability small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.draft-history {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.draft-history summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.draft-history article {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.draft-history p {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.inbox-local-banner {
+  border: 1px solid rgba(180, 35, 24, 0.18);
+  border-radius: 8px;
 }
 
 @media (max-width: 430px) {

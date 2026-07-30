@@ -5,8 +5,10 @@ import { signIn, signOut } from "next-auth/react";
 import type {
   ClinicAgentApproveAndSendGmailOutput,
   ClinicAgentApproveSendAndBookCalendarOutput,
+  ClinicAgentGetConversationOutput,
   ClinicAgentGetDailyBriefingOutput,
   ClinicAgentListActionsOutput,
+  ClinicAgentListConversationsOutput,
   ClinicAgentListIntegrationsOutput,
   ClinicAgentListPatientsOutput,
   ClinicAgentListScheduleOutput,
@@ -17,12 +19,14 @@ import type {
 import { googleProviderId } from "@/src/lib/auth/providers";
 
 type ClinicAction = ClinicAgentListActionsOutput["actions"][number];
+type Conversation = ClinicAgentListConversationsOutput["conversations"][number];
+type ConversationDetail = ClinicAgentGetConversationOutput;
 type DailyBriefing = ClinicAgentGetDailyBriefingOutput;
 type Patient = ClinicAgentListPatientsOutput["patients"][number];
 type ScheduleDay = ClinicAgentListScheduleOutput["days"][number];
 type Settings = ClinicAgentListSettingsOutput;
 type Integration = ClinicAgentListIntegrationsOutput["integrations"][number];
-type Tab = "actions" | "schedule" | "patients";
+type Tab = "actions" | "inbox" | "schedule" | "patients";
 type ScheduleEvent = ScheduleDay["events"][number];
 
 const SCHEDULE_DAYS_PER_PAGE = 7;
@@ -301,6 +305,7 @@ function Rounds({
   briefing,
   days,
   loading,
+  focusedActionId,
   onBook,
   onSend,
   bookingId,
@@ -310,6 +315,7 @@ function Rounds({
   briefing: DailyBriefing | null;
   days: ScheduleDay[];
   loading: boolean;
+  focusedActionId: string | null;
   onBook: (action: ClinicAction, finalMessage: string) => Promise<void>;
   onSend: (action: ClinicAction, finalMessage: string) => Promise<void>;
   bookingId: string | null;
@@ -341,6 +347,19 @@ function Rounds({
       return next;
     });
   }, [actions]);
+
+  useEffect(() => {
+    if (!focusedActionId || !openActions.some((action) => action.actionId === focusedActionId)) {
+      return;
+    }
+    setExpandedId(focusedActionId);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`rounds-action-${focusedActionId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+  }, [focusedActionId, openActions]);
 
   return (
     <section className="screen-panel rounds-panel" aria-labelledby="rounds-title">
@@ -420,7 +439,11 @@ function Rounds({
           const actionBusy = sendingId === action.actionId || bookingId === action.actionId;
           const showReviewDetails = Boolean(triageReason || suggestedNextAction || constraintSummary);
           return (
-            <article key={action.actionId} className={`action-card priority-${action.priority}`}>
+            <article
+              key={action.actionId}
+              id={`rounds-action-${action.actionId}`}
+              className={`action-card priority-${action.priority}`}
+            >
               <button
                 type="button"
                 className="action-card-button"
@@ -540,6 +563,275 @@ function Rounds({
       </div>
 
       {!loading && openActions.length === 0 ? <div className="empty-state">No open actions need attention.</div> : null}
+    </section>
+  );
+}
+
+function inboxTimestamp(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString("en-GB", {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short",
+  });
+}
+
+function Inbox({
+  conversations,
+  importStatus,
+  messagesProcessed,
+  estimatedTotal,
+  lastSyncAt,
+  scanning,
+  onSync,
+  onReview,
+}: {
+  conversations: Conversation[];
+  importStatus: string;
+  messagesProcessed: number;
+  estimatedTotal: number;
+  lastSyncAt: string | null;
+  scanning: boolean;
+  onSync: () => Promise<void>;
+  onReview: (actionId: string | null) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ConversationDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+
+  const filteredConversations = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) {
+      return conversations;
+    }
+    return conversations.filter((conversation) =>
+      [
+        conversation.patientName,
+        conversation.patientEmail,
+        conversation.subject,
+        conversation.latestMessageExcerpt,
+        conversation.latestClassification,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [conversations, search]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      setDetailError("");
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError("");
+    void loadJson<ClinicAgentGetConversationOutput>(
+      `/api/clinic/conversations/${encodeURIComponent(selectedId)}`,
+    )
+      .then((response) => {
+        if (!cancelled) {
+          setDetail(response);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setDetailError(loadError instanceof Error ? loadError.message : "Unable to load conversation");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  const progressMaximum = Math.max(messagesProcessed, estimatedTotal, 1);
+  const progressValue = Math.min(messagesProcessed, progressMaximum);
+
+  if (selectedId) {
+    const latestDraft = detail?.draftRevisions[detail.draftRevisions.length - 1];
+    return (
+      <section className="screen-panel inbox-panel" aria-labelledby="conversation-title">
+        <button type="button" className="inbox-back-button" onClick={() => setSelectedId(null)}>
+          ← Inbox
+        </button>
+        {detailLoading ? <div className="empty-state">Loading conversation...</div> : null}
+        {detailError ? <div className="error-banner inbox-local-banner">{detailError}</div> : null}
+        {detail ? (
+          <>
+            <div className="section-heading compact conversation-heading">
+              <h1 id="conversation-title">{detail.conversation.patientName || "Unknown sender"}</h1>
+              <p>{detail.conversation.subject}</p>
+            </div>
+
+            <div className="conversation-meta">
+              <span className="status-pill">{actionTypeLabel(detail.conversation.latestClassification)}</span>
+              <span className={`status-pill status-${detail.conversation.status}`}>
+                {statusLabel(detail.conversation.status)}
+              </span>
+            </div>
+
+            <div className="conversation-history" aria-label="Email history">
+              {detail.messages.map((message) => (
+                <article
+                  key={message.messageId}
+                  className={`conversation-message is-${message.direction}`}
+                >
+                  <header>
+                    <strong>
+                      {message.direction === "outbound"
+                        ? "Dr. Shalini's Clinic"
+                        : message.fromName || message.fromEmail || "Patient"}
+                    </strong>
+                    <time>{inboxTimestamp(message.receivedAt)}</time>
+                  </header>
+                  <p>{message.bodyExcerpt}</p>
+                </article>
+              ))}
+            </div>
+
+            {latestDraft ? (
+              <section className="inbox-draft-card" aria-labelledby="latest-draft-title">
+                <header>
+                  <div>
+                    <span>Latest AI draft</span>
+                    <strong id="latest-draft-title">
+                      {actionTypeLabel(latestDraft.classification)}
+                    </strong>
+                  </div>
+                  <time>{inboxTimestamp(latestDraft.createdAt)}</time>
+                </header>
+                <p>{latestDraft.draftBody}</p>
+                {latestDraft.availabilityWindows.length > 0 ? (
+                  <div className="draft-availability">
+                    <span>Calendar availability used</span>
+                    {latestDraft.availabilityWindows.map((window, index) => (
+                      <small key={`${latestDraft.draftRevisionId}-${index}`}>{String(window)}</small>
+                    ))}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => onReview(detail.relatedActionId)}
+                  disabled={!detail.relatedActionId}
+                >
+                  {detail.relatedActionId ? "Review & send in Rounds" : "No review action available"}
+                </button>
+              </section>
+            ) : (
+              <div className="empty-state">No draft response has been prepared for this conversation.</div>
+            )}
+
+            {detail.draftRevisions.length > 1 ? (
+              <details className="draft-history">
+                <summary>{detail.draftRevisions.length - 1} earlier draft revision(s)</summary>
+                {detail.draftRevisions.slice(0, -1).map((revision) => (
+                  <article key={revision.draftRevisionId}>
+                    <time>{inboxTimestamp(revision.createdAt)}</time>
+                    <p>{revision.draftBody}</p>
+                  </article>
+                ))}
+              </details>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section className="screen-panel inbox-panel" aria-labelledby="inbox-title">
+      <div className="section-heading">
+        <h1 id="inbox-title">Inbox</h1>
+        <p>Patient conversations and calendar-aware drafts</p>
+      </div>
+
+      <div className={`inbox-import-card status-${importStatus}`}>
+        <div>
+          <strong>
+            {scanning || importStatus === "importing"
+              ? "Importing the last 30 days"
+              : importStatus === "complete"
+                ? "Gmail inbox is up to date"
+                : "Import the last 30 days"}
+          </strong>
+          <small>
+            {scanning || importStatus === "importing"
+              ? `${messagesProcessed} of approximately ${progressMaximum} messages processed`
+              : lastSyncAt
+                ? `Last completed ${inboxTimestamp(lastSyncAt)}`
+                : "Nothing will be sent during import."}
+          </small>
+        </div>
+        <button type="button" className="secondary-button" onClick={() => void onSync()} disabled={scanning}>
+          {scanning
+            ? "Importing..."
+            : importStatus === "complete"
+              ? "Sync"
+              : importStatus === "importing"
+                ? "Resume import"
+                : "Start import"}
+        </button>
+        {scanning || importStatus === "importing" ? (
+          <progress value={progressValue} max={progressMaximum}>
+            {progressValue}/{progressMaximum}
+          </progress>
+        ) : null}
+      </div>
+
+      <label className="search-field inbox-search">
+        <span>Search conversations</span>
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Patient, subject or request"
+        />
+      </label>
+
+      <div className="stack-list inbox-list">
+        {filteredConversations.map((conversation) => {
+          const needsReview =
+            conversation.latestMessageDirection === "inbound" && conversation.status !== "completed";
+          return (
+            <button
+              key={conversation.conversationId}
+              type="button"
+              className="conversation-row"
+              onClick={() => setSelectedId(conversation.conversationId)}
+            >
+              <span className="conversation-avatar">{initials(conversation.patientName || "?")}</span>
+              <span className="conversation-row-copy">
+                <span>
+                  <strong>{conversation.patientName || conversation.patientEmail || "Unknown sender"}</strong>
+                  <time>{inboxTimestamp(conversation.latestMessageAt)}</time>
+                </span>
+                <b>{conversation.subject || actionTypeLabel(conversation.latestClassification)}</b>
+                <small>{conversation.latestMessageExcerpt}</small>
+              </span>
+              {needsReview ? <span className="conversation-unread-dot" aria-label="Needs review" /> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {filteredConversations.length === 0 ? (
+        <div className="empty-state">
+          {conversations.length === 0
+            ? "No Gmail conversations have been imported yet."
+            : "No conversations match your search."}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1022,15 +1314,16 @@ function SettingsDrawer({
 }
 
 async function loadClinicSnapshot() {
-  const [actionData, patientData, scheduleData, settingsData, integrationData, briefingData] = await Promise.all([
+  const [actionData, conversationData, patientData, scheduleData, settingsData, integrationData, briefingData] = await Promise.all([
     loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
+    loadJson<ClinicAgentListConversationsOutput>("/api/clinic/conversations"),
     loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
     loadJson<ClinicAgentListScheduleOutput>("/api/clinic/schedule"),
     loadJson<ClinicAgentListSettingsOutput>("/api/clinic/settings"),
     loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations"),
     loadJson<ClinicAgentGetDailyBriefingOutput>("/api/clinic/briefing"),
   ]);
-  return { actionData, patientData, scheduleData, settingsData, integrationData, briefingData };
+  return { actionData, conversationData, patientData, scheduleData, settingsData, integrationData, briefingData };
 }
 
 export function ClinicApp({
@@ -1047,6 +1340,11 @@ export function ClinicApp({
   const [tab, setTab] = useState<Tab>("actions");
   const [menuOpen, setMenuOpen] = useState(false);
   const [actions, setActions] = useState<ClinicAction[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [inboxImportStatus, setInboxImportStatus] = useState("not_started");
+  const [inboxMessagesProcessed, setInboxMessagesProcessed] = useState(0);
+  const [inboxEstimatedTotal, setInboxEstimatedTotal] = useState(0);
+  const [inboxLastSyncAt, setInboxLastSyncAt] = useState<string | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [days, setDays] = useState<ScheduleDay[]>([]);
   const [dailyBriefing, setDailyBriefing] = useState<DailyBriefing | null>(null);
@@ -1057,6 +1355,7 @@ export function ClinicApp({
   const [error, setError] = useState("");
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [focusedActionId, setFocusedActionId] = useState<string | null>(null);
   const [syncingCalendar, setSyncingCalendar] = useState(false);
   const [scanningGmail, setScanningGmail] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
@@ -1066,9 +1365,14 @@ export function ClinicApp({
       setLoading(true);
       setError("");
       try {
-        const { actionData, patientData, scheduleData, settingsData, integrationData, briefingData } =
+        const { actionData, conversationData, patientData, scheduleData, settingsData, integrationData, briefingData } =
           await loadClinicSnapshot();
         setActions(actionData.actions);
+        setConversations(conversationData.conversations);
+        setInboxImportStatus(conversationData.importStatus);
+        setInboxMessagesProcessed(conversationData.messagesProcessed);
+        setInboxEstimatedTotal(conversationData.estimatedTotal);
+        setInboxLastSyncAt(conversationData.lastSyncAt);
         setPatients(patientData.patients);
         setDays(scheduleData.days);
         setDailyBriefing(briefingData);
@@ -1139,7 +1443,7 @@ export function ClinicApp({
         throw new Error(body.error || "Unable to send Gmail reply");
       }
       setActions((current) => current.map((item) => (item.actionId === body.action.actionId ? body.action : item)));
-      await refreshDailyBriefing();
+      await Promise.all([refreshDailyBriefing(), refreshConversations()]);
       setNotice("Gmail reply sent after your approval.");
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Unable to send Gmail reply");
@@ -1181,7 +1485,7 @@ export function ClinicApp({
       ]);
       setDays(scheduleData.days);
       setPatients(patientData.patients);
-      await refreshDailyBriefing();
+      await Promise.all([refreshDailyBriefing(), refreshConversations()]);
       setNotice("Appointment booked in Google Calendar and Gmail confirmation sent after your approval.");
     } catch (bookError) {
       setError(bookError instanceof Error ? bookError.message : "Unable to book appointment");
@@ -1193,6 +1497,15 @@ export function ClinicApp({
   async function refreshIntegrations() {
     const integrationData = await loadJson<ClinicAgentListIntegrationsOutput>("/api/clinic/integrations");
     setIntegrations(integrationData.integrations);
+  }
+
+  async function refreshConversations() {
+    const conversationData = await loadJson<ClinicAgentListConversationsOutput>("/api/clinic/conversations");
+    setConversations(conversationData.conversations);
+    setInboxImportStatus(conversationData.importStatus);
+    setInboxMessagesProcessed(conversationData.messagesProcessed);
+    setInboxEstimatedTotal(conversationData.estimatedTotal);
+    setInboxLastSyncAt(conversationData.lastSyncAt);
   }
 
   async function refreshDailyBriefing() {
@@ -1230,20 +1543,42 @@ export function ClinicApp({
     setError("");
     setNotice("");
     try {
-      const response = await fetch("/api/clinic/integrations/gmail/scan", { method: "POST" });
-      const body = (await response.json()) as ClinicAgentScanGmailInboxOutput & { error?: string };
-      if (!response.ok) {
-        throw new Error(body.error || "Unable to scan Gmail");
+      setTab("inbox");
+      let importComplete = false;
+      let pageCount = 0;
+      let latestResult: ClinicAgentScanGmailInboxOutput | null = null;
+      while (!importComplete) {
+        pageCount += 1;
+        if (pageCount > 500) {
+          throw new Error("Gmail import paused after 500 pages. Start Sync again to resume.");
+        }
+        const response = await fetch("/api/clinic/integrations/gmail/scan", { method: "POST" });
+        const body = (await response.json()) as ClinicAgentScanGmailInboxOutput & { error?: string };
+        if (!response.ok) {
+          throw new Error(body.error || "Unable to scan Gmail");
+        }
+        latestResult = body;
+        importComplete = body.importComplete;
+        setInboxImportStatus(body.importStatus);
+        setInboxMessagesProcessed(body.messagesProcessed);
+        setInboxEstimatedTotal(body.estimatedTotal);
       }
-      const [actionData, patientData] = await Promise.all([
+      const [actionData, conversationData, patientData] = await Promise.all([
         loadJson<ClinicAgentListActionsOutput>("/api/clinic/actions?includeCompleted=true"),
+        loadJson<ClinicAgentListConversationsOutput>("/api/clinic/conversations"),
         loadJson<ClinicAgentListPatientsOutput>("/api/clinic/patients"),
       ]);
       setActions(actionData.actions);
+      setConversations(conversationData.conversations);
+      setInboxImportStatus(conversationData.importStatus);
+      setInboxMessagesProcessed(conversationData.messagesProcessed);
+      setInboxEstimatedTotal(conversationData.estimatedTotal);
+      setInboxLastSyncAt(conversationData.lastSyncAt);
       setPatients(patientData.patients);
       await Promise.all([refreshIntegrations(), refreshDailyBriefing()]);
-      setTab("actions");
-      setNotice(`${body.messagesScanned} Gmail messages scanned; ${body.proposedActions} in-app drafts prepared. Nothing was sent.`);
+      setNotice(
+        `${latestResult?.messagesProcessed || 0} Gmail messages processed into conversations. Nothing was sent.`,
+      );
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : "Unable to scan Gmail");
     } finally {
@@ -1270,6 +1605,7 @@ export function ClinicApp({
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "actions", label: "Rounds" },
+    { key: "inbox", label: "Inbox" },
     { key: "schedule", label: "Schedule" },
     { key: "patients", label: "Patients" },
   ];
@@ -1295,10 +1631,10 @@ export function ClinicApp({
 
       <header className="app-header">
         <button type="button" className="brand-button" onClick={() => setMenuOpen(true)} aria-label="Open settings">
-          S
+          N
         </button>
         <div>
-          <strong>Dr. Shalini&apos;s Clinic</strong>
+          <strong>Nora</strong>
           <span>{doctorEmail}</span>
         </div>
         <span className="ai-badge">AI-powered</span>
@@ -1327,10 +1663,26 @@ export function ClinicApp({
             briefing={dailyBriefing}
             days={days}
             loading={loading}
+            focusedActionId={focusedActionId}
             onBook={approveSendAndBookCalendar}
             onSend={approveAndSendGmail}
             bookingId={bookingId}
             sendingId={sendingId}
+          />
+        ) : null}
+        {!showOnboarding && tab === "inbox" ? (
+          <Inbox
+            conversations={conversations}
+            importStatus={inboxImportStatus}
+            messagesProcessed={inboxMessagesProcessed}
+            estimatedTotal={inboxEstimatedTotal}
+            lastSyncAt={inboxLastSyncAt}
+            scanning={scanningGmail}
+            onSync={scanGmail}
+            onReview={(actionId) => {
+              setFocusedActionId(actionId);
+              setTab("actions");
+            }}
           />
         ) : null}
         {!showOnboarding && tab === "schedule" ? <Schedule days={days} /> : null}

@@ -1,15 +1,15 @@
-# Dr. Shalini Clinic App Handoff
+# Nora Clinic Assistant Handoff
 
-Last updated: 2026-05-16
+Last updated: 2026-07-29
 
 This document captures the key design decisions and session context needed to
-continue work on the Dr. Shalini clinic app.
+continue work on Nora, Dr. Shalini's clinic assistant.
 
 For a fuller system overview, see `docs/high-level-design.md`.
 
 ## Product goal
 
-Build a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
+Build Nora, a doctor-facing assistant for Dr. Shalini's clinic. Google Calendar is the
 source of truth for appointments. Gmail is the source of patient communication.
 The app reads both, prepares patient requests, triage, and draft replies, and
 keeps the doctor in control of any completed action.
@@ -17,19 +17,22 @@ Gmail messages are now treated as events inside an ongoing patient request, so a
 patient reply in the same thread should update the existing request rather than
 starting a duplicate one.
 
-## Current branch and deployment
+## Current repository and deployment
 
-- Fork: `https://github.com/suhanisho/infiapp`
+- Repository: `https://github.com/suhanisho/nora`
+- Legacy source: `https://github.com/suhanisho/infiapp/tree/build-clinic-mvp`
 - Upstream: `https://github.com/infiloop2/infiapp`
-- Working branch: `build-clinic-mvp`
+- Default branch: `main`
 - Production app: `https://shalini-clinic-webui.vercel.app`
 - Vercel project: `shalini-clinic-webui`
 - Deploy workflow: `.github/workflows/deploy.yml`
-- Deploys are manual `workflow_dispatch` runs against `build-clinic-mvp`.
-- Latest production code commit before this change set: `5bb53b6` - Reprocess
-  stale Gmail triage records.
-- Latest successful deploy run:
-  `https://github.com/suhanisho/infiapp/actions/runs/25964489454`
+- Future deploys are manual `workflow_dispatch` runs against `main`.
+- The current production deployment was built from legacy commit `c9ab582` -
+  Generate Rounds briefing with LLM.
+- Latest successful legacy deploy run:
+  `https://github.com/suhanisho/infiapp/actions/runs/26004811342`
+- Before the first deploy from `suhanisho/nora`, recreate the repository secrets
+  and variables listed below. GitHub does not copy them between repositories.
 
 ## Safety contract
 
@@ -101,6 +104,8 @@ Shared Google client:
 DynamoDB specs:
 
 - `dynamodb/clinic_agent/clinic_actions.json`
+- `dynamodb/clinic_agent/clinic_conversations.json`
+- `dynamodb/clinic_agent/clinic_draft_revisions.json`
 - `dynamodb/clinic_agent/clinic_email_messages.json`
 - `dynamodb/clinic_agent/clinic_patient_requests.json`
 - `dynamodb/clinic_agent/clinic_practice_members.json`
@@ -136,6 +141,12 @@ Gmail:
 
 - User manually clicks `Scan Gmail`.
 - `scan_gmail_inbox` refreshes OAuth using the stored refresh token.
+- The initial import covers the latest 30 days in bounded Gmail-thread pages.
+  Messages in each thread are processed oldest-to-newest, with LLM review
+  reserved for the latest unprocessed message so historical follow-ups rebuild
+  in the right order without exceeding the Lambda timeout. Continuation token
+  and progress fields live on `clinic_integrations`, allowing the WebUI to
+  resume after refreshes or transient failures without introducing a queue.
 - It lists recent inbox messages, then fetches full read-only message content
   for candidate messages so triage and drafts can use the patient's original
   wording instead of snippets alone.
@@ -153,6 +164,12 @@ Gmail:
   disabled, unavailable, or returns invalid JSON.
 - It stores the main request in `clinic_patient_requests` using
   `practice_id + patient_request_id`.
+- It stores one latest-state Inbox projection per Gmail thread in
+  `clinic_conversations`. Conditional newer-only writes prevent retries or
+  older pages from replacing a newer conversation summary.
+- It stores generated replies in `clinic_draft_revisions` as immutable,
+  per-message snapshots with their classification, constraints, availability
+  windows, and model status.
 - It adds intelligent triage fields to each patient request: request type,
   urgency, risk level, doctor-review requirement, suggested next action,
   patient emotional tone, confidence, and reason.
@@ -283,6 +300,9 @@ Important UI decisions:
   learn to ignore that metric area.
 - `Rounds` is the daily cockpit: greeting, date, briefing, schedule overview,
   and open actions that need attention.
+- `Inbox` is the second tab. It shows one latest-first row per Gmail thread,
+  opens stored message history and draft revisions, and hands the exact linked
+  action to the existing Rounds review/send/book flow.
 - New empty practices see a first-run setup screen for Google connection,
   Calendar read, and Gmail scan. It disappears once synced workspace data
   exists or the user opens the empty workspace.
@@ -302,6 +322,7 @@ Important UI decisions:
   `Approve, send & book`.
 - The bottom nav has:
   - `Rounds`
+  - `Inbox`
   - `Schedule`
   - `Patients`
 

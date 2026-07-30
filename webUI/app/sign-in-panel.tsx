@@ -31,13 +31,14 @@ export function SignInPanel({
   return (
     <main className="signin-shell">
       <section className="signin-panel" aria-labelledby="signin-title">
-        <div className="doctor-avatar">S</div>
+        <div className="doctor-avatar">N</div>
         <div>
-          <p className="date-line">Dr. Shalini&apos;s Clinic</p>
+          <p className="date-line">Nora</p>
           <h1 id="signin-title">Sign in to continue</h1>
         </div>
         <p>
-          Use the clinic Google account to access patient actions, calendar-derived appointments, and approval records.
+          Nora helps Dr. Shalini manage patient actions, calendar-derived appointments, and approval records.
+          Use the clinic Google account to continue.
         </p>
         <button
           type="button"

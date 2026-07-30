@@ -1,1 +1,1 @@
-"""Repository automation for Dr. Shalini's Clinic."""
+"""Repository automation for Nora."""

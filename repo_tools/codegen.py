@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate framework bindings from Dr. Shalini's Clinic specs."""
+"""Generate framework bindings from Nora specs."""
 
 from __future__ import annotations
 
@@ -246,6 +246,66 @@ def render_dynamodb_py(tables: list[dict[str, Any]]) -> str:
                 "        dict[str, Any],",
                 f"        _table({table_constant}, dynamodb_resource).put_item(Item=dict(item)),",
                 "    )",
+                "",
+                "",
+                f"def put_{table_identifier}_if_absent(",
+                f"    item: {item_type_name},",
+                "    *,",
+                "    dynamodb_resource: Any | None = None,",
+                ") -> bool:",
+                '    expression_attribute_names = {"#partition_key": '
+                + json.dumps(partition_key)
+                + "}",
+                '    condition_expression = "attribute_not_exists(#partition_key)"',
+            ]
+        )
+        if sort_key_name:
+            lines.extend(
+                [
+                    f'    expression_attribute_names["#sort_key"] = {json.dumps(sort_key_name)}',
+                    '    condition_expression += " AND attribute_not_exists(#sort_key)"',
+                ]
+            )
+        lines.extend(
+            [
+                "    try:",
+                f"        _table({table_constant}, dynamodb_resource).put_item(",
+                "            Item=dict(item),",
+                "            ConditionExpression=condition_expression,",
+                "            ExpressionAttributeNames=expression_attribute_names,",
+                "        )",
+                "    except Exception as exc:",
+                '        response = getattr(exc, "response", None)',
+                "        error = response.get(\"Error\") if isinstance(response, dict) else None",
+                "        if isinstance(error, dict) and error.get(\"Code\") == \"ConditionalCheckFailedException\":",
+                "            return False",
+                "        raise",
+                "    return True",
+                "",
+                "",
+                f"def put_{table_identifier}_if_newer(",
+                f"    item: {item_type_name},",
+                "    *,",
+                "    ordering_attribute: str,",
+                "    dynamodb_resource: Any | None = None,",
+                ") -> bool:",
+                "    item_dict = dict(item)",
+                "    if ordering_attribute not in item_dict:",
+                f'        raise ValueError(f"{table_name} item does not contain {{ordering_attribute}}.")',
+                "    try:",
+                f"        _table({table_constant}, dynamodb_resource).put_item(",
+                "            Item=item_dict,",
+                '            ConditionExpression="attribute_not_exists(#ordering) OR #ordering < :ordering",',
+                '            ExpressionAttributeNames={"#ordering": ordering_attribute},',
+                '            ExpressionAttributeValues={":ordering": item_dict[ordering_attribute]},',
+                "        )",
+                "    except Exception as exc:",
+                '        response = getattr(exc, "response", None)',
+                '        error = response.get("Error") if isinstance(response, dict) else None',
+                '        if isinstance(error, dict) and error.get("Code") == "ConditionalCheckFailedException":',
+                "            return False",
+                "        raise",
+                "    return True",
                 "",
                 "",
             ]
